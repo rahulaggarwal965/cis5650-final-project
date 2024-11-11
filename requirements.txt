@@ -1,0 +1,33 @@
+absl-py==2.1.0
+cachetools==5.5.0
+certifi==2024.8.30
+charset-normalizer==3.4.0
+diff_gaussian_rasterization @ file:///mnt/kostas-graid/sw/envs/rahulaggarwal965/repos/op43dgs/submodules/diff-gaussian-rasterization-pinhole
+google-auth==2.35.0
+google-auth-oauthlib==0.4.6
+grpcio==1.62.3
+idna==3.10
+importlib-metadata==6.7.0
+Markdown==3.4.4
+MarkupSafe==2.1.5
+numpy==1.21.6
+oauthlib==3.2.2
+Pillow==9.5.0
+plyfile==0.8.1
+protobuf==3.20.3
+pyasn1==0.5.1
+pyasn1-modules==0.3.0
+requests==2.31.0
+requests-oauthlib==2.0.0
+rsa==4.9
+simple_knn @ file:///mnt/kostas-graid/sw/envs/rahulaggarwal965/repos/op43dgs/submodules/simple-knn
+tensorboard==2.11.2
+tensorboard-data-server==0.6.1
+tensorboard-plugin-wit==1.8.1
+torch==1.12.1+cu116
+torchaudio==0.12.1+cu116
+torchvision==0.13.1+cu116
+typing_extensions==4.7.1
+urllib3==2.0.7
+Werkzeug==2.2.3
+zipp==3.15.0
