@@ -398,8 +398,9 @@ renderCUDA(
 	
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
-	__shared__ float2 collected_xy[BLOCK_SIZE];
+	// __shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
+	__shared__ float4 gaussians_sc[BLOCK_SIZE];
 
 	// Initialize helper variables
 	float T = 1.0f;
@@ -407,37 +408,16 @@ renderCUDA(
 	uint32_t last_contributor = 0;
 	float C[CHANNELS] = { 0 };
 
-	const float cx = 0.5 * W - 0.5;
-	const float cy = 0.5 * H - 0.5;
-	const float inv_focal_x = 1.0f / focal_x;
-	const float inv_focal_y = 1.0f / focal_y;
+	const float2 camera_center = {0.5 * W - 0.5, 0.5 * H - 0.5};
+	const float2 inv_focal = {1.0f / focal_x, 1.0f / focal_y};
+
 	// It needs to correspond to fx, fy in the function computeCov2D.
 	const float fx = max(512.f, focal_x);
 	const float fy = max(512.f, focal_y);
 
 	// Generate rays based on pixels (transformation from image space to ray space).
 	// modify to adapt to various camera models (here is for the pinhole camera)
-	float3 t = {
-		(pixf.x - cx) * inv_focal_x,
-		(pixf.y - cy) * inv_focal_y,
-		1
-	};
-
-	// Normalize the ray direction vector.
-	float theta = atan2(-t.y, sqrt(t.x * t.x + t.z * t.z)); 
-	float phi = atan2(t.x, t.z);
-			
-	float sin_phi = sin(phi);
-	float cos_phi = cos(phi);
-
-	float sin_theta = sin(theta);
-	float cos_theta = cos(theta);
-
-	t = {
-		cos_theta * sin_phi,
-		-sin_theta,
-		cos_theta * cos_phi
-	};
+	const float3 t = get_ray(pixf, camera_center, inv_focal);
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -453,8 +433,10 @@ renderCUDA(
 		{
 			int coll_id = point_list[range.x + progress];
 			collected_id[block.thread_rank()] = coll_id;
-			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			const auto xy = points_xy_image[coll_id];
+	 		// collected_xy[block.thread_rank()] = xy;
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
+			gaussians_sc[block.thread_rank()] = get_spherical_coordinates_sincos(xy, camera_center, inv_focal);
 		}
 		block.sync();
 
@@ -475,29 +457,12 @@ renderCUDA(
 
 			// Resample using conic matrix (cf. "Surface 
 			// Splatting" by Zwicker et al., 2001)
-			float2 xy = collected_xy[j];
+			// float2 xy = collected_xy[j];
 			
 			// Compute the tangent plane coordinates of the 2D Gaussian mean.
-			float3 mu = {
-				(xy.x - cx) * inv_focal_x,
-				(xy.y - cy) * inv_focal_y,
-				1
-			};
-
-			theta = atan2(-mu.y, sqrt(mu.x * mu.x + mu.z * mu.z)); 
-			phi = atan2(mu.x, mu.z);
-			
-			sin_phi = sin(phi);
-			cos_phi = cos(phi);
-
-			sin_theta = sin(theta);
-			cos_theta = cos(theta);
-
-			mu = {
-				cos_theta * sin_phi,
-				-sin_theta,
-				cos_theta * cos_phi
-			};
+			const auto &sc = gaussians_sc[j];
+			// const float4 sc = get_spherical_coordinates_sincos(xy, camera_center, inv_focal);
+			const float3 mu = spherical_coordinates_to_cartesian(sc);
 
 			// Determine whether the Gaussian mean and the pixel ray are in the same hemisphere.
 			if (mu.x * t.x + mu.y * t.y + mu.z * t.z < 0.0000001f)  // 0.0000001f
@@ -510,8 +475,10 @@ renderCUDA(
 
 			float uv_pixf_inv = 1.f / (mu.x * t.x + mu.y * t.y + mu.z * t.z);
 
-			float u_pixf = fx * (t.x * cos_phi - t.z * sin_phi) * uv_pixf_inv;
-			float v_pixf = fy * (t.x * sin_phi * sin_theta + t.y * cos_theta + t.z * sin_theta * cos_phi) * uv_pixf_inv;
+			// float u_pixf = fx * (t.x * cos_phi - t.z * sin_phi) * uv_pixf_inv;
+			// float v_pixf = fy * (t.x * sin_phi * sin_theta + t.y * cos_theta + t.z * sin_theta * cos_phi) * uv_pixf_inv;
+			float u_pixf = fx * (t.x * sc.z - t.z * sc.w) * uv_pixf_inv;
+			float v_pixf = fy * (t.x * sc.w * sc.y + t.y * sc.x + t.z * sc.y * sc.z) * uv_pixf_inv;
 
 			float2 d = { u_xy - u_pixf, v_xy - v_pixf }; 
 

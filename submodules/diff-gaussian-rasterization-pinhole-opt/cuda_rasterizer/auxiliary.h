@@ -43,6 +43,55 @@ __forceinline__ __device__ float ndc2Pix(float v, int S)
 	return ((v + 1.0) * S - 1.0) * 0.5;
 }
 
+__forceinline__ __device__ float4 get_spherical_coordinates_sincos(
+	const float2 &pixel_coordinate,
+	const float2 &camera_center,
+	const float2 &inv_focal
+) {
+	float3 ray = {
+		(pixel_coordinate.x - camera_center.x) * inv_focal.x,
+		(pixel_coordinate.y - camera_center.y) * inv_focal.y,
+		1,
+	};
+
+	// get spherical coordinates
+	const auto theta = atan2(-ray.y, sqrt(ray.x * ray.x + ray.z * ray.z)); 
+	const auto phi = atan2(ray.x, ray.z);
+			
+	return {cos(theta), sin(theta), cos(phi), sin(phi)};
+}
+
+__forceinline__ __device__ float3 spherical_coordinates_to_cartesian(const float4 &sc) {
+	return {sc.x * sc.w, -sc.y, sc.x * sc.z};
+}
+
+__forceinline__ __device__ float3 get_ray(
+	const float2 &pixel_coordinate,
+	const float2 &camera_center,
+	const float2 &inv_focal
+) {
+	float3 ray = {
+		(pixel_coordinate.x - camera_center.x) * inv_focal.x,
+		(pixel_coordinate.y - camera_center.y) * inv_focal.y,
+		1,
+	};
+
+	// get spherical coordinates
+	const auto theta = atan2(-ray.y, sqrt(ray.x * ray.x + ray.z * ray.z)); 
+	const auto phi = atan2(ray.x, ray.z);
+			
+	const auto cos_theta = cos(theta);
+
+	// spherical coordinates to cartesian
+	ray = {
+		cos_theta * sin(phi),
+		-sin(theta),
+		cos_theta * cos(phi)
+	};
+
+	return ray;
+}
+
 __forceinline__ __device__ void getRect(const float2 p, int max_radius, uint2& rect_min, uint2& rect_max, dim3 grid)
 {
 	rect_min = {
