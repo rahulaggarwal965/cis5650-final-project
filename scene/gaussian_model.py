@@ -21,6 +21,11 @@ from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 
+try:
+    from diff_gaussian_rasterization import SparseGaussianAdam
+except:
+    pass
+
 class GaussianModel:
 
     def setup_functions(self):
@@ -171,6 +176,8 @@ class GaussianModel:
 
         if self.optimizer_type == "default":
             self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        elif self.optimizer_type == "sparse_adam":
+            self.optimizer = SparseGaussianAdam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
                                                     lr_final=training_args.position_lr_final*self.spatial_lr_scale,
                                                     lr_delay_mult=training_args.position_lr_delay_mult,

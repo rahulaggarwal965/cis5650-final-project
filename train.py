@@ -12,8 +12,9 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
-# from fused_ssim import fused_ssim as ssim
+from utils.loss_utils import l1_loss
+from utils.loss_utils import ssim
+from fused_ssim import fused_ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -32,6 +33,12 @@ except ImportError:
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
+
+    print("OPTIMIZATION FLAGS")
+    print(f"Optimizer: {opt.optimizer_type}")
+    print(f"SH Separation: {'True' if pipe.separate_sh else 'False'}")
+    print(f"Fused SSIM: {'True' if pipe.fused_ssim else 'False'}") 
+
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -90,7 +97,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        ssim_value = ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+        if pipe.fused_ssim:
+            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+        else:
+            ssim_value = ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
 
         loss.backward()
@@ -127,8 +137,13 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Optimizer step
             if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none = True)
+                if opt.optimizer_type == "default":
+                    gaussians.optimizer.step()
+                    gaussians.optimizer.zero_grad(set_to_none = True)
+                elif opt.optimizer_type == "sparse_adam":
+                    visible = radii > 0
+                    gaussians.optimizer.step(visible, radii.shape[0])
+                    gaussians.optimizer.zero_grad(set_to_none = True)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))

@@ -64,6 +64,7 @@ class ModelParams(ParamGroup):
 class PipelineParams(ParamGroup):
     def __init__(self, parser):
         self.separate_sh = False
+        self.fused_ssim = False
         self.convert_SHs_python = False
         self.compute_cov3D_python = False
         self.debug = False
