@@ -68,6 +68,7 @@ def getNerfppNorm(cam_info):
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, **kwargs):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
+        # if idx == 3: break
         sys.stdout.write('\r')
         # the exact output you're looking for:
         sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
@@ -106,7 +107,6 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, **kwargs):
             print(f"FovX: {FovX}, FovY: {FovY}")
         else:
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
-
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
         image_name = os.path.basename(image_path).split(".")[0]
@@ -248,7 +248,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     ply_path = os.path.join(path, "points3D.ply")
     if not os.path.exists(ply_path):
         # Since this data set has no colmap data, we start with random points
-        num_pts = 100_000 # 100_000
+        num_pts = 100_000
         print(f"Generating random point cloud ({num_pts})...")
         
         # We create random points inside the bounds of the synthetic Blender scenes

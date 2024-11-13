@@ -12,7 +12,9 @@
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss, ssim
+from utils.loss_utils import l1_loss
+from utils.loss_utils import ssim
+from fused_ssim import fused_ssim
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -31,7 +33,13 @@ except ImportError:
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree)
+
+    print("OPTIMIZATION FLAGS")
+    print(f"Optimizer: {opt.optimizer_type}")
+    print(f"SH Separation: {'True' if pipe.separate_sh else 'False'}")
+    print(f"Fused SSIM: {'True' if pipe.fused_ssim else 'False'}") 
+
+    gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     if checkpoint:
@@ -48,7 +56,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
-    for iteration in range(first_iter, opt.iterations + 1):        
+    for iteration in range(first_iter, opt.iterations + 1):
         if network_gui.conn == None:
             network_gui.try_connect()
         while network_gui.conn != None:
@@ -89,7 +97,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        if pipe.fused_ssim:
+            ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+        else:
+            ssim_value = ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim_value)
+
         loss.backward()
 
         iter_end.record()
@@ -115,18 +128,22 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                 gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 : # and ( (dataset.max_pcds <= 0 or gaussians.get_xyz.shape[0] < dataset.max_pcds))
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0: # and ( (dataset.max_pcds <= 0 or gaussians.get_xyz.shape[0] < dataset.max_pcds))
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold)
+                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
-
             # Optimizer step
             if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none = True)
+                if opt.optimizer_type == "default":
+                    gaussians.optimizer.step()
+                    gaussians.optimizer.zero_grad(set_to_none = True)
+                elif opt.optimizer_type == "sparse_adam":
+                    visible = radii > 0
+                    gaussians.optimizer.step(visible, radii.shape[0])
+                    gaussians.optimizer.zero_grad(set_to_none = True)
 
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
