@@ -13,6 +13,7 @@ Clone the repository and create an anaconda environment using
 
 ```shell
 git clone git@github.com:rahulaggarwal965/cis5650-final-project.git
+git checkout rahul/backwards_optimization
 cd cis5650-final-project
 
 SET DISTUTILS_USE_SDK=1 # Windows only
@@ -80,5 +81,5 @@ This project is built upon [op43dgs](https://github.com/LetianHuang/op43dgs). Pl
 
 ## Documentation
 
-[Project Pitch](https://docs.google.com/presentation/d/12cumM1NYkJ7Nz2546gtauragFJXBte2i5zr2OOwhN4w/edit?usp=sharing)
-[Milestone 1](https://docs.google.com/presentation/d/1kTaBZR_AYzOxLMjsLN8go0clONUSYL47gi0aoIQo9Wg/edit?usp=sharing)
+* [Project Pitch](https://docs.google.com/presentation/d/12cumM1NYkJ7Nz2546gtauragFJXBte2i5zr2OOwhN4w/edit?usp=sharing)
+* [Milestone 1](https://docs.google.com/presentation/d/1kTaBZR_AYzOxLMjsLN8go0clONUSYL47gi0aoIQo9Wg/edit?usp=sharing)
