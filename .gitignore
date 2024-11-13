@@ -5,9 +5,12 @@ build/
 
 # Environment
 .envrc
+Dockerfile
+scripts/
 
-
+# Output
+output/
+*.so
 
 .vs/
-output/
 viewers/

@@ -107,7 +107,6 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder, **kwargs):
         else:
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
-
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
         image_name = os.path.basename(image_path).split(".")[0]
         image = Image.open(image_path)
@@ -248,7 +247,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     ply_path = os.path.join(path, "points3D.ply")
     if not os.path.exists(ply_path):
         # Since this data set has no colmap data, we start with random points
-        num_pts = 100_000 # 100_000
+        num_pts = 100_000
         print(f"Generating random point cloud ({num_pts})...")
         
         # We create random points inside the bounds of the synthetic Blender scenes
