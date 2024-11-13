@@ -5,3 +5,9 @@ build/
 
 # Environment
 .envrc
+
+
+
+.vs/
+output/
+viewers/
