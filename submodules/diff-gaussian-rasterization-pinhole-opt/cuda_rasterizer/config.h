@@ -13,6 +13,7 @@
 #define CUDA_RASTERIZER_CONFIG_H_INCLUDED
 
 #define NUM_CHAFFELS 3 // Default 3, RGB
+// if you change BLOCK_X or BLOCK_Y, see auxillary.h to perform necessary modifications
 #define BLOCK_X 16
 #define BLOCK_Y 16
 

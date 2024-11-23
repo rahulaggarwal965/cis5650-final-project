@@ -794,8 +794,6 @@ renderCUDA(
 	float* __restrict__ dL_dcolors,
 	float focal_x, float focal_y)
 {
-	const bool use_atomic = false;
-
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
 	const uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
@@ -890,19 +888,20 @@ renderCUDA(
 		}
 		block.sync();
 
-		static constexpr int REDUCTION_BATCH_SIZE = 16;
-		int cur_reduction_batch_idx = 0;
-		__shared__ int batch_j[REDUCTION_BATCH_SIZE];
-		__shared__ float batch_dL_dcolors[REDUCTION_BATCH_SIZE][NUM_WARPS][C];
-		__shared__ float2 batch_dL_dmean2D[REDUCTION_BATCH_SIZE][NUM_WARPS];
-		__shared__ float4 batch_dL_dconic2D_dopacity[REDUCTION_BATCH_SIZE][NUM_WARPS];
+		int batch_idx = 0;
+		__shared__ int batch_j[BATCH_SIZE];
+		__shared__ float batch_dL_dcolors[BATCH_SIZE][NUM_WARPS][C];
+		__shared__ float2 batch_dL_dmean2D[BATCH_SIZE][NUM_WARPS];
+		__shared__ float3 batch_dL_dconic2D_xyw[BATCH_SIZE][NUM_WARPS];
+		__shared__ float batch_dL_dopacity[BATCH_SIZE][NUM_WARPS];
 
 		// Iterate over Gaussians
 		for (int j = 0; j < min(BLOCK_SIZE, toDo); j++)
 		{
-			float cur_dL_dcolors[C] = { 0 };
-			float2 cur_dL_dmean2D = { 0, 0 };
-			float4 cur_dL_dconic2D_dopacity = { 0, 0, 0, 0 };
+			float _it_dL_dcolors[C] = { 0.0f };
+			float2 _it_dL_dmean2D = float2{ 0.0f };
+			float3 _it_dL_dconic2D_xyw = float3{ 0.0f };
+			float _it_dL_dopacity = 0.0f;
 
 			// Keep track of current Gaussian ID. Skip, if this one
 			// is behind the last contributor for this pixel.
@@ -971,15 +970,8 @@ renderCUDA(
 						const float dL_dchannel = dL_dpixel[ch];
 						dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
 						// Update the gradients w.r.t. color of the Gaussian. 
-						// Atomic, since this pixel is just one of potentially
-						// many that were affected by this Gaussian.
-
-						if (use_atomic) {
-							atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
-						}
-						else {
-							cur_dL_dcolors[ch] = dchannel_dcolor * dL_dchannel;
-						}
+						// this pixel is just one of potentially many that were affected by this Gaussian.
+						_it_dL_dcolors[ch] = dchannel_dcolor * dL_dchannel;
 					}
 					dL_dalpha *= T;
 					// Update last alpha (to be used in the next iteration)
@@ -1039,127 +1031,106 @@ renderCUDA(
 						const float ddely_dy = f_y * (tx2 * x2 + 2 * tx * x + ty2 * x2 + ty2 + 1)
 												* inv_x2_1_pow0_5 / ((tx2 * x2 + 2 * tx * ty * x * y + 2 * tx * x + ty2 * y2 + 2 * ty * y + 1));
 
+						_it_dL_dmean2D = float2{
+							dL_dG * (dG_ddelx * ddelx_dx + dG_ddely * ddely_dx) * tan_fovx,
+							dL_dG * (dG_ddelx * ddelx_dy + dG_ddely * ddely_dy) * tan_fovy
+						};
 
+						_it_dL_dconic2D_xyw = float3{
+							-0.5f * gdx * d.x * dL_dG,
+							-0.5f * gdx * d.y * dL_dG,
+							-0.5f * gdy * d.y * dL_dG
+						};
 
-						// Update gradients w.r.t. 2D mean position of the Gaussian
-
-						if (use_atomic) {
-							// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
-							// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
-							atomicAdd(&dL_dmean2D[global_id].x, dL_dG * (dG_ddelx * ddelx_dx + dG_ddely * ddely_dx) * tan_fovx);
-							atomicAdd(&dL_dmean2D[global_id].y, dL_dG * (dG_ddelx * ddelx_dy + dG_ddely * ddely_dy) * tan_fovy);
-
-							// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
-							atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
-							atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
-							atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
-
-							// Update gradients w.r.t. opacity of the Gaussian
-							atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
-						}
-						else {
-							cur_dL_dmean2D = {
-								dL_dG * (dG_ddelx * ddelx_dx + dG_ddely * ddely_dx) * tan_fovx,
-								dL_dG * (dG_ddelx * ddelx_dy + dG_ddely * ddely_dy) * tan_fovy
-							};
-							cur_dL_dconic2D_dopacity = {
-								-0.5f * gdx * d.x * dL_dG,
-								-0.5f * gdx * d.y * dL_dG,
-								G * dL_dalpha,
-								-0.5f * gdy * d.y * dL_dG
-							};
-						}
+						_it_dL_dopacity = G * dL_dalpha;
 					}
 				}
 			}
 
-			if (!use_atomic) {
-				// Perform warp-level reduction
-				#pragma unroll
-				for (int offset = 32/2; offset > 0; offset /= 2) {
-					#pragma unroll
-					for (int ch = 0; ch < C; ch++)
-						cur_dL_dcolors[ch] += __shfl_down_sync(0xFFFFFFFF, cur_dL_dcolors[ch], offset);
-					cur_dL_dmean2D.x += __shfl_down_sync(0xFFFFFFFF, cur_dL_dmean2D.x, offset);
-					cur_dL_dmean2D.y += __shfl_down_sync(0xFFFFFFFF, cur_dL_dmean2D.y, offset);
-					cur_dL_dconic2D_dopacity.x += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.x, offset);
-					cur_dL_dconic2D_dopacity.y += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.y, offset);
-					cur_dL_dconic2D_dopacity.z += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.z, offset);
-					cur_dL_dconic2D_dopacity.w += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.w, offset);
+			// Warp-level reduction to store into shared memory
+			for (int offset = WARP_SIZE_DIV_2; offset > 0; offset >>= 1) {
+				for (int ch = 0; ch < C; ch++) {
+					_it_dL_dcolors[ch] += __shfl_down_sync(FULL_MASK, _it_dL_dcolors[ch], offset);
 				}
-
-				// Store the results in shared memory
-				if (block.thread_rank() % WARP_SIZE == 0)
-				{
-					int warp_id = block.thread_rank() / WARP_SIZE;
-					batch_j[cur_reduction_batch_idx] = j;
-					#pragma unroll
-					for (int ch = 0; ch < C; ch++)
-						batch_dL_dcolors[cur_reduction_batch_idx][warp_id][ch] = cur_dL_dcolors[ch];
-					batch_dL_dmean2D[cur_reduction_batch_idx][warp_id] = cur_dL_dmean2D;
-					batch_dL_dconic2D_dopacity[cur_reduction_batch_idx][warp_id] = cur_dL_dconic2D_dopacity;
-				}
-				cur_reduction_batch_idx += 1;
+				_it_dL_dmean2D.x += __shfl_down_sync(FULL_MASK, _it_dL_dmean2D.x, offset);
+				_it_dL_dmean2D.y += __shfl_down_sync(FULL_MASK, _it_dL_dmean2D.y, offset);
+				_it_dL_dconic2D_xyw.x += __shfl_down_sync(FULL_MASK, _it_dL_dconic2D_xyw.x, offset);
+				_it_dL_dconic2D_xyw.y += __shfl_down_sync(FULL_MASK, _it_dL_dconic2D_xyw.y, offset);
+				_it_dL_dconic2D_xyw.z += __shfl_down_sync(FULL_MASK, _it_dL_dconic2D_xyw.z, offset);
+				_it_dL_dopacity += __shfl_down_sync(FULL_MASK, _it_dL_dopacity, offset);
 			}
 
-			// If this is the last Gaussian in the batch, perform block-level
-			// reduction and store the results in global memory.
-			if (cur_reduction_batch_idx == REDUCTION_BATCH_SIZE || (j == min(BLOCK_SIZE, toDo) - 1 && cur_reduction_batch_idx != 0))
+			if (block.thread_rank() % WARP_SIZE == 0)
 			{
-				// Make sure we can perform this reduction with one warp
-				static_assert(NUM_WARPS <= WARP_SIZE);
-				// Make sure the number of warps is a power of 2
-				static_assert((NUM_WARPS & (NUM_WARPS - 1)) == 0);
+				int warp_id = block.thread_rank() / WARP_SIZE;
+				batch_j[batch_idx] = j;
+				for (int ch = 0; ch < C; ch++) {
+					batch_dL_dcolors[batch_idx][warp_id][ch] = _it_dL_dcolors[ch];
+				}
+				batch_dL_dmean2D[batch_idx][warp_id] = _it_dL_dmean2D;
+				batch_dL_dconic2D_xyw[batch_idx][warp_id] = _it_dL_dconic2D_xyw;
+				batch_dL_dopacity[batch_idx][warp_id] = _it_dL_dopacity;
+			}
 
-				// Wait for all warps to finish storing
+			++batch_idx;
+
+			// If last Gaussian in batch
+			// Block-level reduction to store in global memory
+			if (batch_idx == BATCH_SIZE || (j == min(BLOCK_SIZE, toDo) - 1 && batch_idx != 0))
+			{
 				block.sync();
 
-				for (int batch_id = block.thread_rank() / WARP_SIZE; batch_id < cur_reduction_batch_idx; batch_id += NUM_WARPS) {
+				for (int batch_id = block.thread_rank() / WARP_SIZE; batch_id < batch_idx; batch_id += NUM_WARPS) {
 					int lane_id = block.thread_rank() % WARP_SIZE;
 
-					// Perform warp-level reduction
-					#pragma unroll
-					for (int ch = 0; ch < C; ch++)
-						cur_dL_dcolors[ch] = lane_id < NUM_WARPS ? batch_dL_dcolors[batch_id][lane_id][ch] : 0,
-					cur_dL_dmean2D = lane_id < NUM_WARPS ? batch_dL_dmean2D[batch_id][lane_id] : float2{0, 0},
-					cur_dL_dconic2D_dopacity = lane_id < NUM_WARPS ? batch_dL_dconic2D_dopacity[batch_id][lane_id] : float4{0, 0, 0, 0};
-
-					#pragma unroll
-					for (int offset = NUM_WARPS/2; offset > 0; offset /= 2) {
-						#pragma unroll
-						for (int ch = 0; ch < C; ch++)
-							cur_dL_dcolors[ch] += __shfl_down_sync(0xFFFFFFFF, cur_dL_dcolors[ch], offset);
-						cur_dL_dmean2D.x += __shfl_down_sync(0xFFFFFFFF, cur_dL_dmean2D.x, offset);
-						cur_dL_dmean2D.y += __shfl_down_sync(0xFFFFFFFF, cur_dL_dmean2D.y, offset);
-						cur_dL_dconic2D_dopacity.x += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.x, offset);
-						cur_dL_dconic2D_dopacity.y += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.y, offset);
-						cur_dL_dconic2D_dopacity.z += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.z, offset);
-						cur_dL_dconic2D_dopacity.w += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.w, offset);
+					if (lane_id < NUM_WARPS) {
+						for (int ch = 0; ch < C; ch++) {
+							_it_dL_dcolors[ch] = batch_dL_dcolors[batch_id][lane_id][ch];
+						}
+						_it_dL_dmean2D = batch_dL_dmean2D[batch_id][lane_id];
+						_it_dL_dconic2D_xyw = batch_dL_dconic2D_xyw[batch_id][lane_id];
+						_it_dL_dopacity = batch_dL_dopacity[batch_id][lane_id];
+					}
+					else {
+						for (int ch = 0; ch < C; ch++) {
+							_it_dL_dcolors[ch] = 0.0f;
+						}
+						_it_dL_dmean2D = float2{ 0.0f };
+						_it_dL_dconic2D_xyw = float3{ 0.0f };
+						_it_dL_dopacity = 0.0f;
 					}
 
-					// Store the results in global memory
-					if (lane_id == 0)
-					{
+					for (int offset = NUM_WARPS_DIV_2; offset > 0; offset >>= 1) {
+						for (int ch = 0; ch < C; ch++) {
+							_it_dL_dcolors[ch] += __shfl_down_sync(FULL_MASK, _it_dL_dcolors[ch], offset);
+						}
+						_it_dL_dmean2D.x += __shfl_down_sync(FULL_MASK, _it_dL_dmean2D.x, offset);
+						_it_dL_dmean2D.y += __shfl_down_sync(FULL_MASK, _it_dL_dmean2D.y, offset);
+						_it_dL_dconic2D_xyw.x += __shfl_down_sync(FULL_MASK, _it_dL_dconic2D_xyw.x, offset);
+						_it_dL_dconic2D_xyw.y += __shfl_down_sync(FULL_MASK, _it_dL_dconic2D_xyw.y, offset);
+						_it_dL_dconic2D_xyw.z += __shfl_down_sync(FULL_MASK, _it_dL_dconic2D_xyw.z, offset);
+						_it_dL_dopacity += __shfl_down_sync(FULL_MASK, _it_dL_dopacity, offset);
+					}
+
+					if (lane_id == 0) {
 						const int global_id = collected_id[batch_j[batch_id]];
-						// if (global_id < 0 || global_id >= 208424)
-							// printf("%d\n", global_id);
-						#pragma unroll
-						for (int ch = 0; ch < C; ch++)
-							atomicAdd(&dL_dcolors[global_id * C + ch], cur_dL_dcolors[ch]);
-						atomicAdd(&dL_dmean2D[global_id].x, cur_dL_dmean2D.x);
-						atomicAdd(&dL_dmean2D[global_id].y, cur_dL_dmean2D.y);
-						atomicAdd(&dL_dconic2D[global_id].x, cur_dL_dconic2D_dopacity.x);
-						atomicAdd(&dL_dconic2D[global_id].y, cur_dL_dconic2D_dopacity.y);
-						atomicAdd(&dL_dconic2D[global_id].w, cur_dL_dconic2D_dopacity.w);
-						atomicAdd(&dL_dopacity[global_id], cur_dL_dconic2D_dopacity.z);
+						for (int ch = 0; ch < C; ch++) {
+							atomicAdd(&dL_dcolors[global_id * C + ch], _it_dL_dcolors[ch]);
+						}
+						atomicAdd(&dL_dmean2D[global_id].x, _it_dL_dmean2D.x);
+						atomicAdd(&dL_dmean2D[global_id].y, _it_dL_dmean2D.y);
+						atomicAdd(&dL_dconic2D[global_id].x, _it_dL_dconic2D_xyw.x);
+						atomicAdd(&dL_dconic2D[global_id].y, _it_dL_dconic2D_xyw.y);
+						atomicAdd(&dL_dconic2D[global_id].w, _it_dL_dconic2D_xyw.z);
+						atomicAdd(&dL_dopacity[global_id], _it_dL_dopacity);
 					}
 				}
 
-				// Wait for all warps to finish reducing
-				if (j != min(BLOCK_SIZE, toDo) - 1)
+				if (j != min(BLOCK_SIZE, toDo) - 1) {
 					block.sync();
+				}
 
-				cur_reduction_batch_idx = 0;
+				batch_idx = 0;
 			}
 		}
 	}
