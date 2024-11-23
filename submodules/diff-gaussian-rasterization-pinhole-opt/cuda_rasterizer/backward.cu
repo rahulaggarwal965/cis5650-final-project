@@ -794,6 +794,8 @@ renderCUDA(
 	float* __restrict__ dL_dcolors,
 	float focal_x, float focal_y)
 {
+	const bool use_atomic = false;
+
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
 	const uint32_t horizontal_blocks = (W + BLOCK_X - 1) / BLOCK_X;
@@ -888,163 +890,277 @@ renderCUDA(
 		}
 		block.sync();
 
+		static constexpr int REDUCTION_BATCH_SIZE = 16;
+		int cur_reduction_batch_idx = 0;
+		__shared__ int batch_j[REDUCTION_BATCH_SIZE];
+		__shared__ float batch_dL_dcolors[REDUCTION_BATCH_SIZE][NUM_WARPS][C];
+		__shared__ float2 batch_dL_dmean2D[REDUCTION_BATCH_SIZE][NUM_WARPS];
+		__shared__ float4 batch_dL_dconic2D_dopacity[REDUCTION_BATCH_SIZE][NUM_WARPS];
+
 		// Iterate over Gaussians
-		for (int j = 0; !done && j < min(BLOCK_SIZE, toDo); j++)
+		for (int j = 0; j < min(BLOCK_SIZE, toDo); j++)
 		{
+			float cur_dL_dcolors[C] = { 0 };
+			float2 cur_dL_dmean2D = { 0, 0 };
+			float4 cur_dL_dconic2D_dopacity = { 0, 0, 0, 0 };
+
 			// Keep track of current Gaussian ID. Skip, if this one
 			// is behind the last contributor for this pixel.
 			contributor--;
-			if (contributor >= last_contributor)
-				continue;
+			if (!done && contributor < last_contributor) {
 
-			// Compute blending values, as before.
-			const float2 xy = collected_xy[j];
-			// const float2 d = { xy.x - pixf.x, xy.y - pixf.y };
+				// Compute blending values, as before.
+				const float2 xy = collected_xy[j];
+				// const float2 d = { xy.x - pixf.x, xy.y - pixf.y };
 
-			float3 mu = {
-				(xy.x - cx) * inv_x,
-				(xy.y - cy) * inv_y,
-				1
-			};
+				float3 mu = {
+					(xy.x - cx) * inv_x,
+					(xy.y - cy) * inv_y,
+					1
+				};
 
-			theta = atan2(-mu.y, sqrt(mu.x * mu.x + mu.z * mu.z)); 
-			phi = atan2(mu.x, mu.z);
-			
-			sin_phi = sin(phi);
-			cos_phi = cos(phi);
+				theta = atan2(-mu.y, sqrt(mu.x * mu.x + mu.z * mu.z));
+				phi = atan2(mu.x, mu.z);
 
-			sin_theta = sin(theta);
-			cos_theta = cos(theta);
+				sin_phi = sin(phi);
+				cos_phi = cos(phi);
 
-			mu = {
-				cos_theta * sin_phi,
-				-sin_theta,
-				cos_theta * cos_phi
-			};
+				sin_theta = sin(theta);
+				cos_theta = cos(theta);
 
-			if (mu.x * t.x + mu.y * t.y + mu.z * t.z < 0.0000001f)  // 0.0000001f
+				mu = {
+					cos_theta * sin_phi,
+					-sin_theta,
+					cos_theta * cos_phi
+				};
+
+				float u_xy = 0.0f;
+				float v_xy = 0.0f;
+
+				const float uv_pixf = (mu.x * t.x + mu.y * t.y + mu.z * t.z);
+				const float uv_pixf_inv = 1.f / uv_pixf;
+
+				float u_pixf = max(512.f, focal_x) * (t.x * cos_phi - t.z * sin_phi) * uv_pixf_inv;
+				float v_pixf = max(512.f, focal_y) * (t.x * sin_phi * sin_theta + t.y * cos_theta + t.z * sin_theta * cos_phi) * uv_pixf_inv;
+
+				float2 d = { u_xy - u_pixf, v_xy - v_pixf };
+
+				const float4 con_o = collected_conic_opacity[j];
+				const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
+
+				const float G = exp(power);
+				const float alpha = min(0.99f, con_o.w * G);
+
+				if (mu.x * t.x + mu.y * t.y + mu.z * t.z >= 0.0000001f && power <= 0.0f && alpha >= 1.0f / 255.0f) {
+
+					T = T / (1.f - alpha);
+					const float dchannel_dcolor = alpha * T;
+
+					// Propagate gradients to per-Gaussian colors and keep
+					// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
+					// pair).
+					float dL_dalpha = 0.0f;
+					const int global_id = collected_id[j];
+					for (int ch = 0; ch < C; ch++)
+					{
+						const float c = collected_colors[ch * BLOCK_SIZE + j];
+						// Update last color (to be used in the next iteration)
+						accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
+						last_color[ch] = c;
+
+						const float dL_dchannel = dL_dpixel[ch];
+						dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
+						// Update the gradients w.r.t. color of the Gaussian. 
+						// Atomic, since this pixel is just one of potentially
+						// many that were affected by this Gaussian.
+
+						if (use_atomic) {
+							atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
+						}
+						else {
+							cur_dL_dcolors[ch] = dchannel_dcolor * dL_dchannel;
+						}
+					}
+					dL_dalpha *= T;
+					// Update last alpha (to be used in the next iteration)
+					last_alpha = alpha;
+
+					// Account for fact that alpha also influences how much of
+					// the background color is added if nothing left to blend
+					float bg_dot_dpixel = 0;
+					for (int i = 0; i < C; i++)
+						bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
+					dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
+
+
+					// Helpful reusable temporary variables
+					const float dL_dG = con_o.w * dL_dalpha;
+					const float gdx = G * d.x;
+					const float gdy = G * d.y;
+					const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
+					const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
+
+					if (con_o.w * G <= 0.99f) {
+
+						const float x = (xy.x - cx) * inv_x;
+						const float y = (xy.y - cy) * inv_y;
+
+						const float tx = t.x;
+						const float ty = t.y;
+
+						const float tx2 = tx * tx;
+						const float ty2 = ty * ty;
+						const float x2 = x * x;
+						const float y2 = y * y;
+
+						const float x2_1 = x2 + 1;
+						const float x2_y2_1 = x2_1 + y * y;
+						const float txx_1 = tx * x + 1;
+						const float txx_tyy_1 = txx_1 + ty * y;
+						const float tmp1 = - tx * (x2_y2_1) + x * (txx_tyy_1);
+
+						const float x2_1_pow1_5 = pow(x2_1, 1.5);
+						const float txx_tyy_1_pow2 = pow(txx_tyy_1, 2);
+						const float x2_y2_1_pow0_5 = sqrt(x2_y2_1);
+						const float x2_1_pow0_5 = sqrt(x2_1);
+
+						const float inv_x2_1_pow1_5 = 1.0f / x2_1_pow1_5;
+						const float inv_x2_1_pow0_5 = 1.0f / x2_1_pow0_5;
+						const float inv_txx_tyy_1_pow2 = 1.0f / txx_tyy_1_pow2;
+						const float inv_x2_y2_1_pow0_5 = 1.0f / x2_y2_1_pow0_5;
+
+
+						const float ddelx_dx = f_x * (- (tx - x) * (x2_1) * (tmp1) + (x2_y2_1) * (txx_1) * (txx_tyy_1))
+												* inv_x2_1_pow1_5 * inv_txx_tyy_1_pow2 * inv_x2_y2_1_pow0_5;
+						const float ddely_dx = f_y * ((x2_1) * (tmp1) * (- ty * (x2_1) + y * (txx_1)) - (txx_tyy_1) * (- ty * x * pow(x2_1, 2) + x * y * (x2_1) * (txx_1) + x * y * (txx_1) * (x2_y2_1) + (x2_1) * (- tx * y + ty * x) * (x2_y2_1)))
+												* inv_x2_1_pow1_5 * inv_txx_tyy_1_pow2 / ((x2_y2_1));
+						const float ddelx_dy = f_x * (tx - x) * (ty * (x2_y2_1) - y * (txx_tyy_1))
+												* inv_x2_1_pow0_5 * inv_txx_tyy_1_pow2 * inv_x2_y2_1_pow0_5;
+						const float ddely_dy = f_y * (tx2 * x2 + 2 * tx * x + ty2 * x2 + ty2 + 1)
+												* inv_x2_1_pow0_5 / ((tx2 * x2 + 2 * tx * ty * x * y + 2 * tx * x + ty2 * y2 + 2 * ty * y + 1));
+
+
+
+						// Update gradients w.r.t. 2D mean position of the Gaussian
+
+						if (use_atomic) {
+							// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
+							// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
+							atomicAdd(&dL_dmean2D[global_id].x, dL_dG * (dG_ddelx * ddelx_dx + dG_ddely * ddely_dx) * tan_fovx);
+							atomicAdd(&dL_dmean2D[global_id].y, dL_dG * (dG_ddelx * ddelx_dy + dG_ddely * ddely_dy) * tan_fovy);
+
+							// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
+							atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
+							atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
+							atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
+
+							// Update gradients w.r.t. opacity of the Gaussian
+							atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
+						}
+						else {
+							cur_dL_dmean2D = {
+								dL_dG * (dG_ddelx * ddelx_dx + dG_ddely * ddely_dx) * tan_fovx,
+								dL_dG * (dG_ddelx * ddelx_dy + dG_ddely * ddely_dy) * tan_fovy
+							};
+							cur_dL_dconic2D_dopacity = {
+								-0.5f * gdx * d.x * dL_dG,
+								-0.5f * gdx * d.y * dL_dG,
+								G * dL_dalpha,
+								-0.5f * gdy * d.y * dL_dG
+							};
+						}
+					}
+				}
+			}
+
+			if (!use_atomic) {
+				// Perform warp-level reduction
+				#pragma unroll
+				for (int offset = 32/2; offset > 0; offset /= 2) {
+					#pragma unroll
+					for (int ch = 0; ch < C; ch++)
+						cur_dL_dcolors[ch] += __shfl_down_sync(0xFFFFFFFF, cur_dL_dcolors[ch], offset);
+					cur_dL_dmean2D.x += __shfl_down_sync(0xFFFFFFFF, cur_dL_dmean2D.x, offset);
+					cur_dL_dmean2D.y += __shfl_down_sync(0xFFFFFFFF, cur_dL_dmean2D.y, offset);
+					cur_dL_dconic2D_dopacity.x += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.x, offset);
+					cur_dL_dconic2D_dopacity.y += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.y, offset);
+					cur_dL_dconic2D_dopacity.z += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.z, offset);
+					cur_dL_dconic2D_dopacity.w += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.w, offset);
+				}
+
+				// Store the results in shared memory
+				if (block.thread_rank() % WARP_SIZE == 0)
+				{
+					int warp_id = block.thread_rank() / WARP_SIZE;
+					batch_j[cur_reduction_batch_idx] = j;
+					#pragma unroll
+					for (int ch = 0; ch < C; ch++)
+						batch_dL_dcolors[cur_reduction_batch_idx][warp_id][ch] = cur_dL_dcolors[ch];
+					batch_dL_dmean2D[cur_reduction_batch_idx][warp_id] = cur_dL_dmean2D;
+					batch_dL_dconic2D_dopacity[cur_reduction_batch_idx][warp_id] = cur_dL_dconic2D_dopacity;
+				}
+				cur_reduction_batch_idx += 1;
+			}
+
+			// If this is the last Gaussian in the batch, perform block-level
+			// reduction and store the results in global memory.
+			if (cur_reduction_batch_idx == REDUCTION_BATCH_SIZE || (j == min(BLOCK_SIZE, toDo) - 1 && cur_reduction_batch_idx != 0))
 			{
-				continue;
+				// Make sure we can perform this reduction with one warp
+				static_assert(NUM_WARPS <= WARP_SIZE);
+				// Make sure the number of warps is a power of 2
+				static_assert((NUM_WARPS & (NUM_WARPS - 1)) == 0);
+
+				// Wait for all warps to finish storing
+				block.sync();
+
+				for (int batch_id = block.thread_rank() / WARP_SIZE; batch_id < cur_reduction_batch_idx; batch_id += NUM_WARPS) {
+					int lane_id = block.thread_rank() % WARP_SIZE;
+
+					// Perform warp-level reduction
+					#pragma unroll
+					for (int ch = 0; ch < C; ch++)
+						cur_dL_dcolors[ch] = lane_id < NUM_WARPS ? batch_dL_dcolors[batch_id][lane_id][ch] : 0,
+					cur_dL_dmean2D = lane_id < NUM_WARPS ? batch_dL_dmean2D[batch_id][lane_id] : float2{0, 0},
+					cur_dL_dconic2D_dopacity = lane_id < NUM_WARPS ? batch_dL_dconic2D_dopacity[batch_id][lane_id] : float4{0, 0, 0, 0};
+
+					#pragma unroll
+					for (int offset = NUM_WARPS/2; offset > 0; offset /= 2) {
+						#pragma unroll
+						for (int ch = 0; ch < C; ch++)
+							cur_dL_dcolors[ch] += __shfl_down_sync(0xFFFFFFFF, cur_dL_dcolors[ch], offset);
+						cur_dL_dmean2D.x += __shfl_down_sync(0xFFFFFFFF, cur_dL_dmean2D.x, offset);
+						cur_dL_dmean2D.y += __shfl_down_sync(0xFFFFFFFF, cur_dL_dmean2D.y, offset);
+						cur_dL_dconic2D_dopacity.x += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.x, offset);
+						cur_dL_dconic2D_dopacity.y += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.y, offset);
+						cur_dL_dconic2D_dopacity.z += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.z, offset);
+						cur_dL_dconic2D_dopacity.w += __shfl_down_sync(0xFFFFFFFF, cur_dL_dconic2D_dopacity.w, offset);
+					}
+
+					// Store the results in global memory
+					if (lane_id == 0)
+					{
+						const int global_id = collected_id[batch_j[batch_id]];
+						// if (global_id < 0 || global_id >= 208424)
+							// printf("%d\n", global_id);
+						#pragma unroll
+						for (int ch = 0; ch < C; ch++)
+							atomicAdd(&dL_dcolors[global_id * C + ch], cur_dL_dcolors[ch]);
+						atomicAdd(&dL_dmean2D[global_id].x, cur_dL_dmean2D.x);
+						atomicAdd(&dL_dmean2D[global_id].y, cur_dL_dmean2D.y);
+						atomicAdd(&dL_dconic2D[global_id].x, cur_dL_dconic2D_dopacity.x);
+						atomicAdd(&dL_dconic2D[global_id].y, cur_dL_dconic2D_dopacity.y);
+						atomicAdd(&dL_dconic2D[global_id].w, cur_dL_dconic2D_dopacity.w);
+						atomicAdd(&dL_dopacity[global_id], cur_dL_dconic2D_dopacity.z);
+					}
+				}
+
+				// Wait for all warps to finish reducing
+				if (j != min(BLOCK_SIZE, toDo) - 1)
+					block.sync();
+
+				cur_reduction_batch_idx = 0;
 			}
-
-			float u_xy = 0.0f;
-			float v_xy = 0.0f;
-
-			const float uv_pixf = (mu.x * t.x + mu.y * t.y + mu.z * t.z);
-			const float uv_pixf_inv = 1.f / uv_pixf;
-
-			float u_pixf = max(512.f, focal_x) * (t.x * cos_phi - t.z * sin_phi) * uv_pixf_inv;
-			float v_pixf = max(512.f, focal_y) * (t.x * sin_phi * sin_theta + t.y * cos_theta + t.z * sin_theta * cos_phi) * uv_pixf_inv;
-
-			float2 d = { u_xy - u_pixf, v_xy - v_pixf }; 
-
-			const float4 con_o = collected_conic_opacity[j];
-			const float power = -0.5f * (con_o.x * d.x * d.x + con_o.z * d.y * d.y) - con_o.y * d.x * d.y;
-			if (power > 0.0f)
-				continue;
-
-			const float G = exp(power);
-			const float alpha = min(0.99f, con_o.w * G);
-			if (alpha < 1.0f / 255.0f)
-				continue;
-
-			T = T / (1.f - alpha);
-			const float dchannel_dcolor = alpha * T;
-
-			// Propagate gradients to per-Gaussian colors and keep
-			// gradients w.r.t. alpha (blending factor for a Gaussian/pixel
-			// pair).
-			float dL_dalpha = 0.0f;
-			const int global_id = collected_id[j];
-			for (int ch = 0; ch < C; ch++)
-			{
-				const float c = collected_colors[ch * BLOCK_SIZE + j];
-				// Update last color (to be used in the next iteration)
-				accum_rec[ch] = last_alpha * last_color[ch] + (1.f - last_alpha) * accum_rec[ch];
-				last_color[ch] = c;
-
-				const float dL_dchannel = dL_dpixel[ch];
-				dL_dalpha += (c - accum_rec[ch]) * dL_dchannel;
-				// Update the gradients w.r.t. color of the Gaussian. 
-				// Atomic, since this pixel is just one of potentially
-				// many that were affected by this Gaussian.
-				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
-			}
-			dL_dalpha *= T;
-			// Update last alpha (to be used in the next iteration)
-			last_alpha = alpha;
-
-			// Account for fact that alpha also influences how much of
-			// the background color is added if nothing left to blend
-			float bg_dot_dpixel = 0;
-			for (int i = 0; i < C; i++)
-				bg_dot_dpixel += bg_color[i] * dL_dpixel[i];
-			dL_dalpha += (-T_final / (1.f - alpha)) * bg_dot_dpixel;
-
-
-			// Helpful reusable temporary variables
-			const float dL_dG = con_o.w * dL_dalpha;
-			const float gdx = G * d.x;
-			const float gdy = G * d.y;
-			const float dG_ddelx = -gdx * con_o.x - gdy * con_o.y;
-			const float dG_ddely = -gdy * con_o.z - gdx * con_o.y;
-
-			if(con_o.w*G > 0.99f){
-				continue;
-			}
-
-			const float x = (xy.x - cx) * inv_x;
-			const float y = (xy.y - cy) * inv_y;
-
-			const float tx = t.x;
-			const float ty = t.y;
-
-			const float tx2 = tx * tx;
-			const float ty2 = ty * ty;
-			const float x2 = x * x;
-			const float y2 = y * y;
-
-			const float x2_1 = x2 + 1;
-			const float x2_y2_1 = x2_1 + y * y;
-			const float txx_1 = tx * x + 1;
-			const float txx_tyy_1 = txx_1 + ty * y;
-			const float tmp1 = - tx * (x2_y2_1) + x * (txx_tyy_1);
-
-			const float x2_1_pow1_5 = pow(x2_1, 1.5);
-			const float txx_tyy_1_pow2 = pow(txx_tyy_1, 2);
-			const float x2_y2_1_pow0_5 = sqrt(x2_y2_1);
-			const float x2_1_pow0_5 = sqrt(x2_1);
-
-			const float inv_x2_1_pow1_5 = 1.0f / x2_1_pow1_5;
-			const float inv_x2_1_pow0_5 = 1.0f / x2_1_pow0_5;
-			const float inv_txx_tyy_1_pow2 = 1.0f / txx_tyy_1_pow2;
-			const float inv_x2_y2_1_pow0_5 = 1.0f / x2_y2_1_pow0_5;
-			
-
-			const float ddelx_dx = f_x * (- (tx - x) * (x2_1) * (tmp1) + (x2_y2_1) * (txx_1) * (txx_tyy_1))
-									* inv_x2_1_pow1_5 * inv_txx_tyy_1_pow2 * inv_x2_y2_1_pow0_5;
-			const float ddely_dx = f_y * ((x2_1) * (tmp1) * (- ty * (x2_1) + y * (txx_1)) - (txx_tyy_1) * (- ty * x * pow(x2_1, 2) + x * y * (x2_1) * (txx_1) + x * y * (txx_1) * (x2_y2_1) + (x2_1) * (- tx * y + ty * x) * (x2_y2_1))) 
-									* inv_x2_1_pow1_5 * inv_txx_tyy_1_pow2 / ((x2_y2_1));
-			const float ddelx_dy = f_x * (tx - x) * (ty * (x2_y2_1) - y * (txx_tyy_1)) 
-									* inv_x2_1_pow0_5 * inv_txx_tyy_1_pow2 * inv_x2_y2_1_pow0_5;
-			const float ddely_dy = f_y * (tx2 * x2 + 2 * tx * x + ty2 * x2 + ty2 + 1) 
-									* inv_x2_1_pow0_5 / ((tx2 * x2 + 2 * tx * ty * x * y + 2 * tx * x + ty2 * y2 + 2 * ty * y + 1));
-
-
-
-			// Update gradients w.r.t. 2D mean position of the Gaussian
-			// atomicAdd(&dL_dmean2D[global_id].x, dL_dG * dG_ddelx * ddelx_dx);
-			// atomicAdd(&dL_dmean2D[global_id].y, dL_dG * dG_ddely * ddely_dy);
-			atomicAdd(&dL_dmean2D[global_id].x, dL_dG * (dG_ddelx * ddelx_dx + dG_ddely * ddely_dx) * tan_fovx);
-			atomicAdd(&dL_dmean2D[global_id].y, dL_dG * (dG_ddelx * ddelx_dy + dG_ddely * ddely_dy) * tan_fovy);
-
-			// Update gradients w.r.t. 2D covariance (2x2 matrix, symmetric)
-			atomicAdd(&dL_dconic2D[global_id].x, -0.5f * gdx * d.x * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].y, -0.5f * gdx * d.y * dL_dG);
-			atomicAdd(&dL_dconic2D[global_id].w, -0.5f * gdy * d.y * dL_dG);
-
-			// Update gradients w.r.t. opacity of the Gaussian
-			atomicAdd(&(dL_dopacity[global_id]), G * dL_dalpha);
 		}
 	}
 }
