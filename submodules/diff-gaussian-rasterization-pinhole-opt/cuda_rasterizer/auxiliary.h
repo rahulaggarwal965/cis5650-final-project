@@ -24,7 +24,7 @@
 #define NUM_WARPS 8
 #define NUM_WARPS_DIV_2 4
 
-#define BATCH_SIZE WARP_SIZE
+#define BATCH_SIZE 16
 
 // NOTES
 // Ensure NUM_WARPS <= WARP_SIZE so we can perform backwards block-level reduction with one warp

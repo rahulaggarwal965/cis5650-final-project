@@ -803,6 +803,11 @@ renderCUDA(
 	const uint32_t pix_id = W * pix.y + pix.x;
 	const float2 pixf = { (float)pix.x, (float)pix.y };
 
+	//int lane_id = block.thread_rank() % WARP_SIZE; // warp-level id
+	//int warp_id = block.thread_rank() / WARP_SIZE;
+	int lane_id = block.thread_rank() & 31; // warp-level id
+	int warp_id = block.thread_rank() >> 5;
+
 	const bool inside = pix.x < W&& pix.y < H;
 	const uint2 range = ranges[block.group_index().y * horizontal_blocks + block.group_index().x];
 
@@ -1047,7 +1052,7 @@ renderCUDA(
 				}
 			}
 
-			// Warp-level reduction to store into shared memory
+			// Warp-level reduction
 			for (int offset = WARP_SIZE_DIV_2; offset > 0; offset >>= 1) {
 				for (int ch = 0; ch < C; ch++) {
 					_it_dL_dcolors[ch] += __shfl_down_sync(FULL_MASK, _it_dL_dcolors[ch], offset);
@@ -1060,9 +1065,10 @@ renderCUDA(
 				_it_dL_dopacity += __shfl_down_sync(FULL_MASK, _it_dL_dopacity, offset);
 			}
 
-			if (block.thread_rank() % WARP_SIZE == 0)
+			// For the given batch represented by batch_idx
+			// For each warp, the warp leader (lane 0) writes warp-level reduced partial gradients to shared memory
+			if (lane_id == 0)
 			{
-				int warp_id = block.thread_rank() / WARP_SIZE;
 				batch_j[batch_idx] = j;
 				for (int ch = 0; ch < C; ch++) {
 					batch_dL_dcolors[batch_idx][warp_id][ch] = _it_dL_dcolors[ch];
@@ -1078,11 +1084,14 @@ renderCUDA(
 			// Block-level reduction to store in global memory
 			if (batch_idx == BATCH_SIZE || (j == min(BLOCK_SIZE, toDo) - 1 && batch_idx != 0))
 			{
+				// Ensure all threads finish their warp-level reductions and shared memory writes before continuing
 				block.sync();
 
-				for (int batch_id = block.thread_rank() / WARP_SIZE; batch_id < batch_idx; batch_id += NUM_WARPS) {
-					int lane_id = block.thread_rank() % WARP_SIZE;
+				// Each warp works on one batch at a time
+				// A batch has NUM_WARPS partial values
+				for (int batch_id = warp_id; batch_id < batch_idx; batch_id += NUM_WARPS) {
 
+					// Initialize all lanes in the warp that is handling current batch
 					if (lane_id < NUM_WARPS) {
 						for (int ch = 0; ch < C; ch++) {
 							_it_dL_dcolors[ch] = batch_dL_dcolors[batch_id][lane_id][ch];
@@ -1100,6 +1109,7 @@ renderCUDA(
 						_it_dL_dopacity = 0.0f;
 					}
 
+					// Warp-level reduction on current batch
 					for (int offset = NUM_WARPS_DIV_2; offset > 0; offset >>= 1) {
 						for (int ch = 0; ch < C; ch++) {
 							_it_dL_dcolors[ch] += __shfl_down_sync(FULL_MASK, _it_dL_dcolors[ch], offset);
@@ -1112,6 +1122,7 @@ renderCUDA(
 						_it_dL_dopacity += __shfl_down_sync(FULL_MASK, _it_dL_dopacity, offset);
 					}
 
+					// Warp leader writes final reduced gradient for the batch to global memory
 					if (lane_id == 0) {
 						const int global_id = collected_id[batch_j[batch_id]];
 						for (int ch = 0; ch < C; ch++) {
