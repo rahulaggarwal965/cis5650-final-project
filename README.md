@@ -133,17 +133,24 @@ The Fused SSIM optimization was taken from [2], and involves optimizing the stru
 
 We note that the parallelization scheme for gaussian splatting assigns each *tile* a CUDA block and each *pixel* within a tile a thread. However, this means that each pixel must iterate through each Gaussian.
 
-Pre-Optimization
-- During each iteration, compute partial gradients and write to global gradient arrays using atomicAdd 
+Pre-Optimization:
+- During each iteration, each thread computes partial gradients and writes to global gradient arrays using atomicAdd 
 
-Post-Optimization
-- During each iteration, perform warp-level reduction of computed partial gradients
+Post-Optimization:
+- During each iteration, perform warp-level reduction of thread-computed partial gradients
   - __shfl_down_sync
 - Warp leader writes reduced value to shared memory
   - 2D shared memory: [iteration][warp_id]
 - Once we fill up shared memory with enough iterations (batches), each warp takes a shared memory batch with NUM_WARPS partial gradients to reduce
 - Perform warp-level reduction on the batch
 - Warp leader writes final reduced gradient for the batch to global gradient arrays using atomicAdd
+
+In theory, best case is atomicAdd calls are reduced by 1/256
+- 1/32 from initial warp-level reduction
+- 1/8 from second warp-level reduction
+
+Drawback
+- Increased block synchronization overhead
 
 ### Performance Summary
 
