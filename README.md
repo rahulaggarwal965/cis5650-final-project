@@ -135,10 +135,10 @@ TODO (mike):
 
 Our performance metrics were tested on a number of scenes, and overall we see a 37% average improvement due to our various optimizations. Below, we provide an analysis of the Bonsai scene to give a specific example of our optimization's performance on a medium size scene. **Note that the following scene is randomly picked**. We display example renderings and performance summar  below.
 
-|fov_ratio|GT|Render|
-|--|--|--|
-|1|![gt](assets/renders/gt.png)|![fov_ratio_0_1](assets/renders/fov_ratio_1_pinhole_render.png)|
-|0.1|![gt](assets/renders/gt.png)|![fov_ratio_0_1](assets/renders/fov_ratio_0_1_pinhole_render.png)|
+| fov_ratio | GT                           | Render                                                            |
+| --------- | ---------------------------- | ----------------------------------------------------------------- |
+| 1         | ![gt](assets/renders/gt.png) | ![fov_ratio_0_1](assets/renders/fov_ratio_1_pinhole_render.png)   |
+| 0.1       | ![gt](assets/renders/gt.png) | ![fov_ratio_0_1](assets/renders/fov_ratio_0_1_pinhole_render.png) |
 
 Above, we see that our implementation performs quite well even as we increase the FOV, which thereby increases the number of Gaussians that need to be rendered.
 
@@ -150,9 +150,29 @@ We see that the most important optimization is the separating of the spherical h
 
 ## Fisheye Camera Model Implementation
 
-### Camera Model
+Below, we detail our intuition and implementation for our (wip) fisheye camera model implementation.
+
+### Camera Models
+
+The pinhole camera model and the fisheye camera model are two distinct approaches to simulating camera behavior in computer graphics, photography, and optical systems. They differ in how they project the 3D world onto a 2D image plane. Here’s a detailed comparison:
+
+| Aspect              | Pinhole                                                                                                                                                                                                                                                       | Fisheye  (Equidistant Projection Model)                                                                                                                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Diagram             | ![pinhole_camera_model](assets/docs/camera_models/pinhole_camera_model.png)                                                                                                                                                                                   | ![fisheye_camera_model](assets/docs/camera_models/fisheye_camera_model.png)                                                                                                            |
+| Projection Type     | **Perspective Projection**: Maps a 3D point onto the image plane using a straight-line projection through a single pinhole (or a mathematical center of projection). Maintains linearity, meaning straight lines in 3D space remain straight in the 2D image. | **Non-linear projection**:  Maps a 3D point onto a hemispherical or circular image plane and introduces controlled distortion to achieve an ultra-wide FoV.                            |
+| Field of View (FOV) | Limited by the geometry of the pinhole aperture and the image plane.  Typically ranges up to 90 degrees before distortion becomes significant.                                                                                                                | Extremely wide, up to 180 degrees or more. Captures more of the surrounding environment in a single image.                                                                             |
+| Lens Distortion     | Assumes an idealized, distortion-free lens.  No barrel, pincushion, or other forms of lens distortion.                                                                                                                                                        | Includes significant intentional distortion to accommodate the ultra-wide FoV. Straight lines not passing through the image center appear curved.                                      |
+| Applications        | Used in rendering engines and photography for creating realistic, undistorted images.  Ideal for applications requiring geometric accuracy, such as architectural visualization.                                                                              | Ideal for panoramic photography, VR imaging, robotics, and astrophotography. Used in applications where a large portion of the environment needs to be captured.                       |
+| Advantages          | Simple mathematical formulation.  Preserves proportions and shapes in the image.                                                                                                                                                                              | Captures a much wider scene in a single image.  Useful for immersive experiences or where spatial awareness is crucial.                                                                |
+| Limitations         | Narrower FoV compared to fisheye cameras.  Cannot capture very wide scenes in a single frame.                                                                                                                                                                 | Images are heavily distorted, making them less suitable for tasks requiring geometric accuracy. Straight lines in the real world are curved unless they pass through the optical axis. |
+
+Overall, the most important difference to notice is that while in the pinhole model, the angle of incidence with respect to the optical axis is the same as the ray's angle when intersecting the image plane, in the fisheye model, the angle intersecting the image plane is distorted, allowing for wider FOVs to remain withinf frame.
 
 ### Gradient Derivation
+
+The key to understanding the gradient derivation is keeping the following in mind: We are given the loss with respect to the projected gaussian in the tangent plane. We would like to "transport" that loss onto the gaussian's image space mean, such that we can eventually propagate it to the gaussian's 3D center.
+
+![backward_gradient](assets/docs/backward_gradient/output_video.gif)
 
 #### Forward
 
@@ -164,7 +184,7 @@ Then, given camera center $\vec{c} \in \mathbb{R}_{\ge 0}^2$ and focal length $\
 
 $$ r(\vec{p}) = \sqrt{\frac{\left(p_x - c_x\right)^{2}}{f_{x}^{2}} + \frac{\left(p_y - c_y\right)^{2}}{f_{y}^{2}}} $$
 
-We can the  project $\vec{p}$ into the camera space ray $\vec{r}$ using the following formula.
+We can the project $\vec{p}$ into the camera space ray $\vec{r}$ using the following formula.
 
 $$
 \vec{r}(\vec{p}) = \left[\begin{matrix}
@@ -268,6 +288,14 @@ We note that our use of the jacobian notation here hides much of the very expens
 
 
 ### Current State
+
+As of 12/01/24, the fisheye camera model implementation still has bugs to fix. We provide a comparison of what our rendering currently generates versus a proper fisheye projection:
+
+| Ideal Fisheye                                      | Ours                                                             |
+| -------------------------------------------------- | ---------------------------------------------------------------- |
+| ![ideal_fisheye](assets/renders/ideal_fisheye.png) | ![ours_fisheye](assets/renders/fov_ratio_0_1_fisheye_render.png) |
+
+We do see the characteristic circular pattern we would expect to see out of a fisheye lens; however, there are many artifacts outside the circle that represents the max fov. I theorize that this has to do with how the gaussian bounding boxes are being calculated. More work must be done.
 
 
 ## Gaussian Splatting SLAM
