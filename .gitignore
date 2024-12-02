@@ -5,3 +5,9 @@ build/
 
 # Environment
 .envrc
+Dockerfile
+scripts/
+
+# Output
+output/
+*.so
