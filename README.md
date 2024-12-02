@@ -493,8 +493,8 @@ We tested on the TUM (NARROW FOV) dataset as of now, where we see that optimal S
 
 | Version         | Map | ATE ↓     | LPIPS ↓  | SSIM ↑   | PSNR ↑   | FPS ↑   |
 | --------------- | --- | --------- | -------- | -------- | -------- | ------- |
-| Original        | ![tum_origslam](assets/slam_results/tum_original_slam_traj.png)    | 0.058     | 0.36     | 0.75     | 21.7     | **4.1** |
-| Optimal         | ![tum_optislam](assets/slam_results/tum_optimal_slam_traj.png)    | 0.063     | 0.44     | 0.71     | 19.8     | 0.54    |
+| Original        | ![tum_origslam](assets/slam_results/tum_original_slam_traj.png)    | 0.063     | 0.44     | 0.71     | 19.8     | **4.1** |
+| Optimal         | ![tum_optislam](assets/slam_results/tum_optimal_slam_traj.png)    | 0.058    | 0.36     | 0.75     | 21.7     | 0.54    |
 | Optimal + Depth | ![tum_ptislam_depth](assets/slam_results/tum_optimal_plus_depth_slam_traj.png)    | **0.017** | **0.23** | **0.82** | **23.4** | 0.43    |
 
 ## Acknowledgements
