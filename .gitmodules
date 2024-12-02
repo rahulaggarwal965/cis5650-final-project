@@ -2,3 +2,6 @@
 	path = submodules/MonoGS
 	url = https://github.com/rahulaggarwal965/MonoGS.git
 	branch = optisplat.speedup
+[submodule "submodules/glm"]
+	path = submodules/glm
+	url = https://github.com/g-truc/glm.git
