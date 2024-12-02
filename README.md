@@ -33,6 +33,8 @@ Clone the repository and create an anaconda environment using
 ```shell
 git clone https://github.com/rahulaggarwal965/cis5650-final-project.git
 cd cis5650-final-project
+git submodule init
+git submodule update
 
 SET DISTUTILS_USE_SDK=1 # Windows only
 conda env create --file environment.yml
@@ -56,7 +58,7 @@ pip install submodules/diff-gaussian-rasterization-panorama
 pip install submodules/diff-gaussian-rasterization-fisheye-opt
 ```
 
-## Datasets
+## Optimal Splatting Datasets
 
 ### Mip-NeRF 360 Dataset
 
@@ -360,13 +362,13 @@ We do see the characteristic circular pattern we would expect to see out of a fi
 
 ## Gaussian Splatting SLAM Installation
 
-To install our custom compatible Gaussian Splatting SLAM installation, clone the repository using
+To install our custom compatible Gaussian Splatting SLAM installation move into the following directory:
+
 ```shell
-git submodule init
-git submodule update
+cd submodules/MonoGS
 ```
 
-Verify that in `submodules/MonoGS`, you have checked out the `optisplat.speedup` branch. Then, install the necessary requirements:
+and verify that in `submodules/MonoGS`, you have checked out the `optisplat.speedup` branch. Note, from here on out, we will assume you are in the `submodules/MonoGS` repository. Then, install the necessary requirements:
 
 ```shell
 pip install -r requirements.txt
@@ -381,6 +383,53 @@ Finally, to enable support for pose optimization, run the command below:
 pip install submodules/diff-gaussian-rasterization-pinhole-opt-w-pose
 ```
 
+## Gaussian Splatting SLAM Datasets
+
+Running the following scripts will automatically download datasets to the `./datasets` folder.
+
+### TUM-RGBD dataset
+```bash
+bash scripts/download_tum.sh
+```
+
+### Replica dataset
+```bash
+bash scripts/download_replica.sh
+```
+
+### EuRoC MAV dataset
+```bash
+bash scripts/download_euroc.sh
+```
+
+## Running
+
+If using the optimal splatting gaussian rasterizer, please remember to set `pipeline_params.separate_sh` to `True` in the config file.
+
+### Monocular
+```bash
+python slam.py --config configs/mono/tum/fr3_office.yaml
+```
+
+### RGB-D
+```bash
+python slam.py --config configs/rgbd/tum/fr3_office.yaml
+```
+
+```bash
+python slam.py --config configs/rgbd/replica/office0.yaml
+```
+Or the single process version as
+```bash
+python slam.py --config configs/rgbd/replica/office0_sp.yaml
+```
+
+## Evaluation
+To evaluate our method, please add `--eval` to the command line argument:
+```bash
+python slam.py --config configs/mono/tum/fr3_office.yaml --eval
+```
+This flag will automatically run our system in a headless mode, and log the results including the rendering metrics.
 
 ## Acknowledgements
 
@@ -396,5 +445,5 @@ This project is built upon [op43dgs](https://github.com/LetianHuang/op43dgs). Pl
 ## References
 
 - [1] On the Error Analysis of 3D Gaussian Splatting and an Optimal Projection Strategy: https://arxiv.org/pdf/2402.00752
-
 - [2] Taming 3DGS: High-Quality Radiance Fields with Limited Resources: https://arxiv.org/pdf/2406.15643
+- [3] Gaussian Splatting SLAM: https://arxiv.org/pdf/2312.06741
