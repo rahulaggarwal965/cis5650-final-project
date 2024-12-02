@@ -359,6 +359,62 @@ We do see the characteristic circular pattern we would expect to see out of a fi
 
 ## Gaussian Splatting SLAM
 
+Gaussian splatting SLAM is a method that combines simultaneous localization and mapping (SLAM) with gaussian splatting, a technique used for rendering and reconstructing 3D scenes.
+
+### SLAM Framework
+* SLAM continuously estimates a moving device's position and orientation (localization) while simultaneously building a map of the environment.
+* It processes input data, typically from cameras, LiDAR, or depth sensors, to compute pose estimates and map updates.
+
+### Gaussian Splatting
+* This is a point-based rendering approach where the 3D scene is represented by a collection of Gaussian blobs, which define the spatial extent and appearance of scene elements.
+* Each Gaussian is parameterized by its position, size, orientation, and color (or other attributes).
+
+### Combining Both
+* As the SLAM algorithm reconstructs the environment, Gaussian splats are dynamically placed or updated to represent the scene geometry and appearance in a compact and visually realistic way.
+* Gaussian splats offer smooth, continuous scene representation and can effectively model fine details and soft transitions.
+
+### Applications
+* This combination is especially useful in real-time mapping and visualization tasks, where efficient rendering and reconstruction of complex scenes are necessary.
+* The method is lightweight compared to traditional dense SLAM and enables fast updates.
+
+Overall, Gaussian splatting SLAM leverages the compactness and efficiency of Gaussian splatting to enhance SLAM's ability to reconstruct and render environments in real-time.
+
+## Optimal Splatting SLAM
+
+We decided to approach the idea of integrating our optimal splatting approach with gaussian splatting SLAM because many robots in the current world use fisheye or other wide-fov lenses. This allows them to see more of their surroundings, thereby allowing them to reason better about their current location and next actions. Indeed, we expect gaussian splatting to be a great tool for SLAM in the future because it is able to efficiently and robustly model the scene's photometric detail. However, as of now, there is no gaussian splatting SLAM model that allows you to use wide FOV cameras. Therefore, we take on the task of adding camera and depth gradients to our optimal splatting approach to make our algorithm amenable to a SLAM setting.
+
+Below, we detail how the camera gradient gets calculated:
+
+![optimal_splatting](assets/docs/camera_gradient/output_video.gif)
+
+Intuitively, we can understand the process as **continuing** the gradient propagation past the 3D gaussian mean and covariance onto the camera pose. We refer the reader to [3] for smaller details, but provide the main equation below:
+
+Suppose we have 3D gaussians $\mathcal{N}(\vec{\mu}_W, \mathbf{\Sigma}_W)$ in world space. Then, in camera space, they are given by
+
+```math
+\vec{\mu}_C = \mathbf{T}^{W}_{C}\vec{\mu}_W, \mathbf{\Sigma}_C = \mathbf{W} \mathbf{\Sigma}_W \mathbf{W}^T
+```
+
+where $\mathbf{W} \in \mathbb{R}^{3 \times 3}$ is the rotational component of $\mathbf{T}^{W}_{C}$. Then, given projection function $\pi$ and the optimal approximation of the projective transformation given by [1] $\mathbf{J}_p$, we compute
+
+```math
+\vec{\mu}_I = \pi(\vec{\mu}_C), \mathbf{\Sigma}_I = \mathbf{Q}\mathbf{J}_p \mathbf{\Sigma}_C \mathbf{J}_p^T \mathbf{Q}^T
+```
+
+Finally, we can differentiate with respect to camera pose $\mathbf{T}^{W}_{C}$.
+
+```math
+\frac{\partial \vec{\mu}_I}{\partial \mathbf{T}^{W}_{C}} = \frac{\partial \vec{\mu}_I}{\partial \vec{\mu}_C} \frac{\mathcal{D} \vec{\mu}_C}{\mathcal{D} \mathbf{T}^{W}_{C}}
+```
+
+```math
+\frac{\partial \mathbf{\Sigma}_I}{\partial \mathbf{T}^{W}_{C}} = \frac{\partial \mathbf{\Sigma}_I}{\partial \mathbf{Q}} \frac{\partial \mathbf{Q}}{\partial \vec{\mu}_C} \frac{\mathcal{D}\vec{\mu}_C}{\mathcal{D} \mathbf{T}^{W}_{C}} +
+\frac{\partial \mathbf{\Sigma}_I}{\partial \mathbf{J}_p} \frac{\partial \mathbf{J}_p}{\partial \vec{\mu}_C} \frac{\mathcal{D}\vec{\mu}_C}{\mathcal{D} \mathbf{T}^{W}_{C}} +
+\frac{\partial \mathbf{\Sigma}_I}{\partial \mathbf{\Sigma}_C} \frac{\partial \mathbf{\Sigma}_C}{\partial \mathbf{W}} \frac{\mathcal{D} \mathbf{W}}{\mathcal{D} \mathbf{T}^{W}_{C}}
+```
+
+We omit details of each specific quantity due to length but encourage the reader to read through the code to get an understanding of how this is computed. For example, in practice we can compute the quantity $\mathbf{Q}\mathbf{J}_p$ and take the derivative with respect to $\vec{\mu}_C$ directly.
+
 
 ## Gaussian Splatting SLAM Installation
 
@@ -430,6 +486,8 @@ To evaluate our method, please add `--eval` to the command line argument:
 python slam.py --config configs/mono/tum/fr3_office.yaml --eval
 ```
 This flag will automatically run our system in a headless mode, and log the results including the rendering metrics.
+
+## Results
 
 ## Acknowledgements
 
