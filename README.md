@@ -178,111 +178,169 @@ The key to understanding the gradient derivation is keeping the following in min
 
 Suppose we have an image coordinate
 
-$$ \vec{p} = \begin{bmatrix} p_x \\ p_y \end{bmatrix} $$
+$$
+\vec{p} = \begin{bmatrix}
+p_x \\ 
+p_y
+\end{bmatrix}
+$$
 
-Then, given camera center $\vec{c} \in \mathbb{R}_{\ge 0}^2$ and focal length $\vec{f} \in \mathbb{R}_{\ge 0}^2$, We first calculate the radius of the image coordinate $r$ as follows: 
+Then, given camera center $\vec{c} \in \mathbb{R}^2_{\ge 0}$ and focal length $\vec{f} \in \mathbb{R}^2_{\ge 0}$, We first calculate the radius of the image coordinate $r$ as follows: 
 
 $$ r(\vec{p}) = \sqrt{\frac{\left(p_x - c_x\right)^{2}}{f_{x}^{2}} + \frac{\left(p_y - c_y\right)^{2}}{f_{y}^{2}}} $$
 
 We can the project $\vec{p}$ into the camera space ray $\vec{r}$ using the following formula.
 
-$$
+```math
 \vec{r}(\vec{p}) = \left[\begin{matrix}
-\frac{\left(p_x - c_x\right) \sin{r}}{rf_{x}} \\ 
-\frac{\left(p_y - c_y\right) \sin{r}}{rf_{y}}\\
-\cos{r}
+\frac{\left(p_x - c_x\right) \sin(r)}{rf_{x}} \\ 
+\frac{\left(p_y - c_y\right) \sin(r)}{rf_{y}}\\
+\cos(r)
 \end{matrix} \right]
-$$
+```
 
 Now, suppose we want to render a gaussian with image space mean
 
-$$\vec{g} = \begin{bmatrix} u_g \\ v_g \end{bmatrix} $$
+```math
+\vec{g} = \begin{bmatrix}
+u_g \\
+v_g
+\end{bmatrix}
+```
 
 onto image pixel 
 
-$$\vec{i} = \begin{bmatrix} u_i \\ v_i \end{bmatrix} $$
+```math
+\vec{i} = \begin{bmatrix}
+u_i \\
+v_i
+\end{bmatrix}
+```
 
 You can imagine that we have calculated a bounding box for our gaussian in the image plane with overlaps onto the specificied image pixel. Then, we can first calculate the **unit** ray associated with the image pixel $\vec{t}$
 
-$$\vec{t} = \frac{\vec{r}(\vec{i})}{\|\vec{r}(\vec{i})\|_2} = \begin{bmatrix} t_x \\ t_y \\ t_z\end{bmatrix}$$
+```math
+\vec{t} = \frac{\vec{r}(\vec{i})}{\|\vec{r}(\vec{i})\|_2} =
+\begin{bmatrix}
+t_x \\
+t_y \\
+t_z
+\end{bmatrix}
+```
 
 Additionally, we calculate the projection of the gaussian image space mean onto the unit-sphere, (the local origin for the tangent plane), calling it $\vec{\mu}$.
 
-$$\vec{\mu} = \frac{\vec{r}(\vec{g})}{\|\vec{r}(\vec{g})\|_2} = \begin{bmatrix} \mu_x \\ \mu_y \\ \mu_z\end{bmatrix}$$
+```math
+\vec{\mu} = \frac{\vec{r}(\vec{g})}{\|\vec{r}(\vec{g})\|_2} =
+\begin{bmatrix}
+\mu_x \\
+\mu_y \\
+\mu_z
+\end{bmatrix}
+```
 
 Recall that the formula for a plane is $\vec{n} \cdot (\vec{a} - \vec{a}_0) = 0$, where $\vec{n}$ is a vector orthogonal to the plan and $\vec{a}_0$ lies in the plane. If $\vec{n}$ is a unit vector and lies in the plane (as in $\vec{\mu}$), then we have
 
-$$
-\vec{n} \cdot (\vec{a} - \vec{n}) = 0 \\
-\vec{n} \cdot \vec{a}  = \vec{n} \cdot \vec{n} \\
-\vec{n} \cdot \vec{a}  = 1
-$$
+```math
+\begin{align*}
+\vec{n} \cdot (\vec{a} - \vec{n}) &= 0 \\
+\vec{n} \cdot \vec{a}  &= \vec{n} \cdot \vec{n} \\
+\vec{n} \cdot \vec{a}  &= 1
+\end{align*}
+```
 
 In our case, we would like to project the image pixel ray $\vec{t}$ onto the tangent plane $\mu_xx + \mu_yy + \mu_zz = 1$. To do so, we use the optimal projection function defined in the paper [1] to get the projection.
 
-$$
-\vec{x}_{\mathrm{2D}} = \left[\begin{matrix}\frac{t_{x}}{\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}}\\\frac{t_{y}}{\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}}\\\frac{t_{z}}{\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}}\end{matrix}\right]
-$$
+```math
+\vec{x}_{\mathrm{2D}} =
+\left[\begin{matrix}
+\frac{t_{x}}{\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}}\\
+\frac{t_{y}}{\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}}\\
+\frac{t_{z}}{\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}}
+\end{matrix}\right]
+```
 
 However, we note that this is a single vector. Remember that the gaussian's covariance is projected onto a tangent plane with a **local coordinate frame**. To align our tangent-plane projected pixel ray with this local coordinate frame such that the components align with the gaussian's covariance axes, we multiply by the matrix $\mathbf{Q}$.
 
-$$
-\mathbf{Q} = \left[\begin{matrix}\frac{\mu_{z}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}}} & 0 & - \frac{\mu_{x}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}}}\\- \frac{\mu_{x} \mu_{y}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}} & \frac{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}}}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}} & - \frac{\mu_{y} \mu_{z}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}}\\\frac{\mu_{x}}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}} & \frac{\mu_{y}}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}} & \frac{\mu_{z}}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}}\end{matrix}\right]
-$$
+```math
+\mathbf{Q} =
+\left[\begin{matrix}\frac{\mu_{z}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}}} & 0 & - \frac{\mu_{x}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}}}\\- \frac{\mu_{x} \mu_{y}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}} & \frac{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}}}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}} & - \frac{\mu_{y} \mu_{z}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}}\\\frac{\mu_{x}}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}} & \frac{\mu_{y}}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}} & \frac{\mu_{z}}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}}
+\end{matrix}\right]
+```
 
 to get the vector $\vec{d}$, which represents the distance from the pixel's projection to gaussian mean in the tangent plane. This is used to calculate the conic and the gaussian's contribution to said pixel.
 
-$$
-\vec{d} = \left[\begin{matrix}\frac{- \mu_{x} t_{z} + \mu_{z} t_{x}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\ 
+```math
+\vec{d} =
+\left[\begin{matrix}\frac{- \mu_{x} t_{z} + \mu_{z} t_{x}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\ 
 \frac{- \mu_{y} \left(\mu_{x} t_{x} + \mu_{z} t_{z}\right) + t_{y} \left(\mu_{x}^{2} + \mu_{z}^{2}\right)}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\
-\frac{1}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}}\end{matrix}\right]
-= \left[\begin{matrix}\frac{- \mu_{x} t_{z} + \mu_{z} t_{x}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)}\\ 
+\frac{1}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}}
+\end{matrix}\right]
+```
+```math
+= \begin{bmatrix}
+\frac{- \mu_{x} t_{z} + \mu_{z} t_{x}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\
 \frac{- \mu_{y} \left(\mu_{x} t_{x} + \mu_{z} t_{z}\right) + t_{y} \left(\mu_{x}^{2} + \mu_{z}^{2}\right)}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\
-1 \end{matrix}\right]
-$$
+1
+\end{bmatrix}
+```
 
 #### Backward
 
 When calulating the backward gradient, you can imagine we have fully rendered the image and have computed the loss $L$. Now, through the gradient of the gaussian's conic, opacity, and power, we can eventually get the jacobian.
 
-$$ \mathbf{J}_L(\vec{d}) = \begin{bmatrix} \frac{\partial L}{\partial d_x} & \frac{\partial L}{\partial d_y} & 0\end{bmatrix} $$
+```math
+\mathbf{J}_L(\vec{d}) = \begin{bmatrix} \frac{\partial L}{\partial d_x} & \frac{\partial L}{\partial d_y} & 0\end{bmatrix}
+```
 
-We need to calculate the jacobian $\mathbf{J}_L(\vec{g})$, the gradient with respect to the gaussian's image space mean. To do so, we repeatedly apply the chain rule. First, we calculate $\mathbf{J}_{\vec{d}}(\vec{\mu})$ (we omit the full gradient due to its length, but we calculate it using a symbolic solver) Please refer to the [derivation](nb/derivation_simple.ipynb) for the full details.
+We need to calculate the jacobian $\mathbf{J}\_L(\vec{d})$, the gradient with respect to the gaussian's image space mean. To do so, we repeatedly apply the chain rule. First, we calculate $\mathbf{J}_{\vec{d}}(\vec{\mu})$ (we omit the full gradient due to its length, but we calculate it using a symbolic solver) Please refer to the [derivation](nb/derivation_simple.ipynb) for the full details.
 
-$$
-\mathbf{J}_{\vec{d}}(\vec{\mu}) = \begin{bmatrix}
+```math
+\mathbf{J}_{\vec{d}}(\vec{\mu}) =
+\begin{bmatrix}
 \frac{\partial d_x}{\partial \mu_x} & \frac{\partial d_x}{\partial \mu_y} & \frac{\partial d_x}{\partial \mu_y} \\
 \frac{\partial d_y}{\partial \mu_x} & \frac{\partial d_y}{\partial \mu_y} & \frac{\partial d_y}{\partial \mu_y} \\
 0 & 0 & 0
 \end{bmatrix}
-$$
+```
 
 For ease of notation, let
 
-$$\vec{r}(\vec{g}) = \begin{bmatrix} r_x \\ r_y \\ r_z \end{bmatrix}$$
+```math
+\vec{r}(\vec{g}) =
+\begin{bmatrix}
+r_x \\
+r_y \\
+r_z
+\end{bmatrix}
+```
 
 We can then calculate the jccobian $\mathbf{J}_{\vec{d}}(\vec{r}(\vec{g}))$
 
-$$
-\mathbf{J}_{\vec{d}}(\vec{r}(\vec{g})) = \left[\begin{matrix}
-\frac{r_{y}^{2} + r_{z}^{2}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}} & - \frac{r_{x} r_{y}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}} & - \frac{r_{x} r_{z}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}}\\- \frac{r_{x} r_{y}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}} & \frac{r_{x}^{2} + r_{z}^{2}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}} & - \frac{r_{y} r_{z}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}}\\- \frac{r_{x} r_{z}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}} & - \frac{r_{y} r_{z}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}} & \frac{r_{x}^{2} + r_{y}^{2}}{\left(r_{x}^{2} + r_{y}^{2} + r_{z}^{2}\right)^{\frac{3}{2}}}\end{matrix}\right]
-$$
+```math
+\mathbf{J}_{\vec{d}}(\vec{r}(\vec{g})) =
+\begin{bmatrix}
+\frac{r_y^{2} + r_z^{2}}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}} & - \frac{r_x r_y}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}} & - \frac{r_x r_z}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}} \\
+-\frac{r_x r_y}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}} & \frac{r_x^{2} + r_z^{2}}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}} & - \frac{r_y r_z}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}} \\
+-\frac{r_x r_z}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}} & - \frac{r_y r_z}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}} & \frac{r_x^{2} + r_y^{2}}{(r_x^{2} + r_y^{2} + r_z^{2})^{\frac{3}{2}}}
+\end{bmatrix}
+```
 
 We then finally calculate the jacobian $\mathbf{J}_{\vec{r}}(\vec{g})$. We again omit the full expression because of its length, but we urge the reader to refer to the full [derivation](nb/derivation_simple.ipynb) for details:
 
-$$
+```math
 \mathbf{J}_{\vec{r}}(\vec{g}) = \begin{bmatrix}
 \frac{\partial r_x}{\partial u_g} & \frac{\partial r_x}{\partial v_g} \\
 \frac{\partial r_y}{\partial u_g} & \frac{\partial r_y}{\partial v_g} \\
 \frac{\partial r_z}{\partial u_g} & \frac{\partial r_z}{\partial v_g} \\
 \end{bmatrix}
-$$
+```
 
 Therefore the full jacobian $\mathbf{J}_L(\vec{g})$ can be calcuated as follows:
 
-$$
+```math
 \mathbf{J}_L(\vec{g}) = \mathbf{J}_L(\vec{d}) \mathbf{J}_{\vec{d}}(\vec{\mu}) \mathbf{J}_{\vec{d}}(\vec{r}(\vec{g})) \mathbf{J}_{\vec{r}}(\vec{g})
-$$
+```
 
 We note that our use of the jacobian notation here hides much of the very expensive math that goes into solving this equation. We make use of [cse](https://docs.sympy.org/latest/modules/rewriting.html) to simplify some calculations.
 
