@@ -1,0 +1,4 @@
+[submodule "submodules/MonoGS"]
+	path = submodules/MonoGS
+	url = https://github.com/rahulaggarwal965/MonoGS.git
+	branch = optisplat.speedup
