@@ -489,6 +489,14 @@ This flag will automatically run our system in a headless mode, and log the resu
 
 ## Results
 
+We tested on the TUM (NARROW FOV) dataset as of now, where we see that optimal SLAM performs worse while optimal SLAM + depth performs much better.
+
+| Version         | Map | ATE ↓     | LPIPS ↓  | SSIM ↑   | PSNR ↑   | FPS ↑   |
+| --------------- | --- | --------- | -------- | -------- | -------- | ------- |
+| Original        | ![tum_origslam](assets/slam_results/tum_original_slam_traj.png)    | 0.058     | 0.36     | 0.75     | 21.7     | **4.1** |
+| Optimal         | ![tum_optislam](assets/slam_results/tum_optimal_slam_traj.png)    | 0.063     | 0.44     | 0.71     | 19.8     | 0.54    |
+| Optimal + Depth | ![tum_ptislam_depth](assets/slam_results/tum_optimal_plus_depth_slam_traj.png)    | **0.017** | **0.23** | **0.82** | **23.4** | 0.43    |
+
 ## Acknowledgements
 
 This project is built upon [op43dgs](https://github.com/LetianHuang/op43dgs). Please follow the license of op43dgs. We thank all the authors for their great work. Additonally, we build heavily upon [MonoGS](https://github.com/muskie82/MonoGS). 
