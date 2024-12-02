@@ -272,15 +272,14 @@ to get the vector $\vec{d}$, which represents the distance from the pixel's proj
 
 ```math
 \vec{d} =
-\left[\begin{matrix}\frac{- \mu_{x} t_{z} + \mu_{z} t_{x}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\ 
-\frac{- \mu_{y} \left(\mu_{x} t_{x} + \mu_{z} t_{z}\right) + t_{y} \left(\mu_{x}^{2} + \mu_{z}^{2}\right)}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\
-\frac{1}{\sqrt{\mu_{x}^{2} + \mu_{y}^{2} + \mu_{z}^{2}}}
-\end{matrix}\right]
-```
-```math
-= \begin{bmatrix}
-\frac{- \mu_{x} t_{z} + \mu_{z} t_{x}}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\
-\frac{- \mu_{y} \left(\mu_{x} t_{x} + \mu_{z} t_{z}\right) + t_{y} \left(\mu_{x}^{2} + \mu_{z}^{2}\right)}{\sqrt{\mu_{x}^{2} + \mu_{z}^{2}} \left(\mu_{x} t_{x} + \mu_{y} t_{y} + \mu_{z} t_{z}\right)} \\
+\begin{bmatrix}
+\frac{- \mu_x t_z + \mu_z t_x}{\sqrt{\mu_x^2 + \mu_z^2} (\mu_x t_x + \mu_y t_y + \mu_z t_z)} \\ 
+\frac{- \mu_y (\mu_x t_x + \mu_z t_z) + t_y (\mu_x^2 + \mu_z^2)}{\sqrt{\mu_x^2 + \mu_z^2} \sqrt{\mu_x^2 + \mu_y^2 + \mu_z^2} (\mu_x t_x + \mu_y t_y + \mu_z t_z)} \\
+\frac{1}{\sqrt{\mu_x^2 + \mu_y^2 + \mu_z^2}}
+\end{bmatrix} =
+\begin{bmatrix}
+\frac{- \mu_x t_z + \mu_z t_x}{\sqrt{\mu_x^2 + \mu_z^2} (\mu_x t_x + \mu_y t_y + \mu_z t_z)} \\
+\frac{- \mu_y (\mu_x t_x + \mu_z t_z) + t_y (\mu_x^2 + \mu_z^2)}{\sqrt{\mu_x^2 + \mu_z^2} (\mu_x t_x + \mu_y t_y + \mu_z t_z)} \\
 1
 \end{bmatrix}
 ```
