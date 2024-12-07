@@ -277,8 +277,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Perform near culling, quit if outside.
 	float3 p_view;
-	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
+	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view)){
 		return;
+	}
+		
 
 	// Transform point by projecting
 	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
@@ -313,12 +315,21 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// 2D covariance matrix). Use extent to compute a bounding rectangle
 	// of screen-space tiles that this Gaussian overlaps with. Quit if
 	// rectangle covers 0 tiles. 
-	float3 naive_cov = computeNaiveCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix);
-	float mid = 0.5f * (naive_cov.x + naive_cov.z);
+	//float3 naive_cov = computeNaiveCov2D(p_orig, focal_x, focal_y, tan_fovx, tan_fovy, cov3D, viewmatrix);
+	//float mid = 0.5f * (naive_cov.x + naive_cov.z);
+	float mid = 0.5f * (cov.x + cov.z);
 	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
 	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
-	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
+
+
+	//float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
+	p_view = transformPoint4x3(p_orig, viewmatrix);
+	const float2 camera_center = {0.5 * W - 0.5, 0.5 * H - 0.5};
+	const float2 inv_focal = {1.0f / focal_x, 1.0f / focal_y};
+	float2 point_image = projectEquidistantFisheye(p_view, camera_center, inv_focal);
+
+	
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
@@ -363,7 +374,7 @@ renderCUDA(
 	uint32_t* __restrict__ max_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	float focal_x, float focal_y)
+	float focal_x, float focal_y, float fov_max)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -395,6 +406,7 @@ renderCUDA(
 			bucket_to_tile[bbm + bucket_idx] = tile_id;
 		}
 	}
+
 	
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
@@ -412,12 +424,20 @@ renderCUDA(
 	const float2 inv_focal = {1.0f / focal_x, 1.0f / focal_y};
 
 	// It needs to correspond to fx, fy in the function computeCov2D.
-	const float fx = max(512.f, focal_x);
-	const float fy = max(512.f, focal_y);
+	const float fx = focal_x;//max(512.f, focal_x);
+	const float fy = focal_x;//max(512.f, focal_y);
 
 	// Generate rays based on pixels (transformation from image space to ray space).
 	// modify to adapt to various camera models (here is for the fisheye camera)
 	const float3 t = get_ray(pixf, camera_center, inv_focal);
+
+	// Check if the angle between t and the (0, 0, 1) vector is greater than fov_max
+	//this is applicable to the circular edge of the fisheye camera
+	//float cos_angle = t.z / sqrt(t.x * t.x + t.y * t.y + t.z * t.z);
+	float cos_angle = t.z / sqrt(t.x * t.x + t.y * t.y + t.z * t.z);
+	if (acos(cos_angle) > fov_max/2) {
+		//done = true;
+	}
 
 	// Iterate over batches until all done or range is complete
 	for (int i = 0; i < rounds; i++, toDo -= BLOCK_SIZE)
@@ -460,7 +480,8 @@ renderCUDA(
 			// float2 xy = collected_xy[j];
 			
 			// Compute the tangent plane coordinates of the 2D Gaussian mean.
-			const auto &sc = gaussians_sc[j];
+			const auto &sc_trad = gaussians_sc[j];
+			const auto &sc = traditional_sc_to_alt(sc_trad);
 			// const float4 sc = get_spherical_coordinates_sincos(xy, camera_center, inv_focal);
 			const float3 mu = spherical_coordinates_to_cartesian(sc);
 
@@ -477,6 +498,8 @@ renderCUDA(
 
 			// float u_pixf = fx * (t.x * cos_phi - t.z * sin_phi) * uv_pixf_inv;
 			// float v_pixf = fy * (t.x * sin_phi * sin_theta + t.y * cos_theta + t.z * sin_theta * cos_phi) * uv_pixf_inv;
+
+
 			float u_pixf = fx * (t.x * sc.z - t.z * sc.w) * uv_pixf_inv;
 			float v_pixf = fy * (t.x * sc.w * sc.y + t.y * sc.x + t.z * sc.y * sc.z) * uv_pixf_inv;
 
@@ -549,7 +572,7 @@ void FORWARD::render(
 	uint32_t* max_contrib,
 	const float* bg_color,
 	float* out_color,
-	float focal_x, float focal_y)
+	float focal_x, float focal_y, float fov_max)
 {
 	renderCUDA<NUM_CHAFFELS> << <grid, block >> > (
 		ranges,
@@ -565,7 +588,7 @@ void FORWARD::render(
 		max_contrib,
 		bg_color,
 		out_color,
-		focal_x, focal_y);
+		focal_x, focal_y, fov_max);
 }
 
 void FORWARD::preprocess(int P, int D, int M,

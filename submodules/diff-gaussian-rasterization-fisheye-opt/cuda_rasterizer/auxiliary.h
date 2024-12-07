@@ -48,6 +48,7 @@ __forceinline__ __device__ float4 get_spherical_coordinates_sincos(
 	const float2 &camera_center,
 	const float2 &inv_focal
 ) {
+	/*
 	float3 ray = {
 		(pixel_coordinate.x - camera_center.x) * inv_focal.x,
 		(pixel_coordinate.y - camera_center.y) * inv_focal.y,
@@ -56,7 +57,6 @@ __forceinline__ __device__ float4 get_spherical_coordinates_sincos(
 
 	const auto radius = sqrt(ray.x * ray.x + ray.y * ray.y);
 	const auto sin_radius = sin(radius);
-
 	ray.x *= sin_radius / radius;
 	ray.y *= sin_radius / radius;
 	ray.z = cos(radius);
@@ -64,12 +64,79 @@ __forceinline__ __device__ float4 get_spherical_coordinates_sincos(
 	// get spherical coordinates
 	const auto theta = atan2(-ray.y, sqrt(ray.x * ray.x + ray.z * ray.z)); 
 	const auto phi = atan2(ray.x, ray.z);
-			
 	return {cos(theta), sin(theta), cos(phi), sin(phi)};
+	*/
+
+	float x_delt = (pixel_coordinate.x - camera_center.x) * inv_focal.x;
+	float y_delt = (pixel_coordinate.y - camera_center.y) * inv_focal.x;
+
+	float radius = sqrt(x_delt * x_delt + y_delt * y_delt);
+
+	const float phi = atan2(y_delt, x_delt); // Azimuth
+    const float theta = radius;    
+
+	const float sin_theta = sin(theta);
+    const float cos_theta = cos(theta);
+    const float sin_phi = sin(phi);
+    const float cos_phi = cos(phi);
+
+	return {cos_theta, sin_theta, cos_phi, sin_phi};
+}
+
+__forceinline__ __device__ float2 projectEquidistantFisheye(
+    const float3 &point3D, // Input 3D point in the camera frame
+	const float2 &camera_center, // Camera center (principal point)
+	const float2 &inv_focal // Inverse focal length
+) {
+	// Step 1: Normalize the 3D point to a direction vector
+	float dist = 1.0f / (sqrt(point3D.x * point3D.x + point3D.y * point3D.y + point3D.z * point3D.z) + 0.0000001f);
+
+	float3 dir = {point3D.x * dist, point3D.y * dist, point3D.z * dist};
+
+	// Step 2: Compute the angle of the ray to the optical axis
+	//float theta = atan2(sqrt(dir.x * dir.x + dir.y * dir.y), dir.z);
+	float theta = atan2(sqrt(dir.x * dir.x + dir.y * dir.y), dir.z); 
+
+	//we have theta = sqrt((x_pix - center_x)*inv_focal_x + ...)
+	//float xoz = point3D.x / point3D.y;
+	float yox = point3D.y / point3D.x;
+
+	float dx = sqrt((theta * theta) / (1 + (yox * yox)));
+	dx /= inv_focal.x;
+	//float r = theta * (1.0 / inv_focal.x);
+	//float dx = r * 
+	//dx = -dx;
+	if(point3D.x < 0){
+		dx = -dx;
+	}
+	float dy = dx * yox;
+
+	float2 pixelCoords = {camera_center.x + dx, camera_center.y + dy};
+
+	/*
+	// Step 4: Normalize to (x, y) plane
+	dist = sqrt(dir.x * dir.x + dir.z * dir.z);
+	float2 normalizedCoords = make_float2(dir.x / dist, dir.z / dist);
+
+	// Step 5: Apply focal length and principal point offset
+	float2 pixelCoords;
+	pixelCoords.x = (focal.x * r * normalizedCoords.x) + camera_center.x;
+	pixelCoords.y = (focal.y * r * normalizedCoords.y) + camera_center.y;
+	*/
+
+    return pixelCoords;
 }
 
 __forceinline__ __device__ float3 spherical_coordinates_to_cartesian(const float4 &sc) {
-	return {sc.x * sc.w, -sc.y, sc.x * sc.z};
+	return {sc.y * sc.z, sc.y * sc.w, sc.x};
+	//return {sc.x * sc.w, -sc.y, sc.x * sc.z};
+}
+
+__forceinline__ __device__ float4 traditional_sc_to_alt(const float4 &sc) {
+	const float3 ray = {sc.y * sc.z, sc.z * sc.w, sc.x};
+	const auto theta = atan2(-ray.y, sqrt(ray.x * ray.x + ray.z * ray.z)); 
+	const auto phi = atan2(ray.x, ray.z);
+	return {cos(theta), sin(theta), cos(phi), sin(phi)};
 }
 
 __forceinline__ __device__ float3 get_ray(

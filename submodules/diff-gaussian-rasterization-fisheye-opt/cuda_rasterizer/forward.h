@@ -65,7 +65,7 @@ namespace FORWARD
 		uint32_t* max_contrib,
 		const float* bg_color,
 		float* out_color,
-		float focal_x, float focal_y);
+		float focal_x, float focal_y, float fov_max);
 }
 
 

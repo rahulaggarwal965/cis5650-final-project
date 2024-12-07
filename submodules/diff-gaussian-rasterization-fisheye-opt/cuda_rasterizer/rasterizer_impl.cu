@@ -349,7 +349,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 	const float* viewmatrix,
 	const float* projmatrix,
 	const float* cam_pos,
-	const float tan_fovx, float tan_fovy,
+	const float tan_fovx, float tan_fovy, float fov_max,
 	const bool prefiltered,
 	float* out_color,
 	int* radii,
@@ -484,7 +484,7 @@ std::tuple<int,int> CudaRasterizer::Rasterizer::forward(
 		imgState.max_contrib,
 		background,
 		out_color, 
-		focal_x, focal_y), debug)
+		focal_x, focal_y, fov_max), debug)
 
 	CHECK_CUDA(cudaMemcpy(imgState.pixel_colors, out_color, sizeof(float) * width * height * NUM_CHAFFELS, cudaMemcpyDeviceToDevice), debug);
 	return std::make_tuple(num_rendered, bucket_sum);
