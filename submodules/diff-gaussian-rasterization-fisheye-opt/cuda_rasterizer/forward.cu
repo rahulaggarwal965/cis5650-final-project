@@ -282,9 +282,21 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// Transform point by projecting
 	float3 p_orig = { orig_points[3 * idx], orig_points[3 * idx + 1], orig_points[3 * idx + 2] };
-	float4 p_hom = transformPoint4x4(p_orig, projmatrix);
-	float p_w = 1.0f / (p_hom.w + 0.0000001f);
-	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+	// float4 p_hom = transformPoint4x4(p_orig, viewmatrix);
+	// float p_w = 1.0f / (sqrt(p_hom.x * p_hom.x + p_hom.y * p_hom.y + p_hom.z * p_hom.z) + 0.0000001f);
+	// float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+	// float4 p_hom = transformPoint4x4(p_orig, projmatrix);
+	// float p_w = 1.0f / (p_hom.w + 0.0000001f);
+	// float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
+
+	const auto eps = 0.0000001f;
+	const auto xy_len = glm::length(glm::vec2{p_view.x, p_view.y}) + eps;
+	const auto theta = glm::atan(xy_len, p_view.z + eps);
+	const glm::vec2 camera_center{(W - 1) / 2.0f, (H - 1) / 2.0f};
+	float2 point_image = {
+		p_view.x * focal_x * theta / xy_len + camera_center.x,
+		p_view.y * focal_y * theta / xy_len + camera_center.y,
+	};
 
 	// If 3D covariance matrix is precomputed, use it, otherwise compute
 	// from scaling and rotation parameters. 
@@ -318,7 +330,23 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
 	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
-	float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
+
+	// point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };	
+	// const auto theta = acos(p_proj.z);
+
+	// float2 point_image = { ndc2Pix(focal_x * theta * p_proj.x, W), ndc2Pix(focal_y * theta * p_proj.y, H) };
+
+	// float theta = atan2(-p_proj.y, sqrt(p_proj.x * p_proj.x + p_proj.z * p_proj.z)); // asin(-p_orig.y);
+	// float phi = atan2(p_proj.x, p_proj.z);
+	// float pi = 3.1415926f;
+
+	// phi /= pi;
+	// theta /= -(pi / 2);
+	// // float2 point_image = { 1.0 * W * phi / 2 + 1.0 * W / 2, -1.0 * theta * H / 2 + 1.0 * H / 2};
+	// float2 point_image = { 
+	// 	ndc2Pix(phi, W), 
+	// 	ndc2Pix(theta, H) 
+	// };
 	uint2 rect_min, rect_max;
 	getRect(point_image, my_radius, rect_min, rect_max, grid);
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
@@ -335,6 +363,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	}
 
 	// Store some useful helper data for the next steps.
+	// depths[idx] = sqrt(p_view.x * p_view.x + p_view.y * p_view.y + p_view.z * p_view.z);
 	depths[idx] = p_view.z;
 	radii[idx] = my_radius;
 	points_xy_image[idx] = point_image;
@@ -464,6 +493,8 @@ renderCUDA(
 			// const float4 sc = get_spherical_coordinates_sincos(xy, camera_center, inv_focal);
 			const float3 mu = spherical_coordinates_to_cartesian(sc);
 
+			const auto sc_alt = traditional_sc_to_alt(sc);
+
 			// Determine whether the Gaussian mean and the pixel ray are in the same hemisphere.
 			if (mu.x * t.x + mu.y * t.y + mu.z * t.z < 0.0000001f)  // 0.0000001f
 			{
@@ -477,8 +508,8 @@ renderCUDA(
 
 			// float u_pixf = fx * (t.x * cos_phi - t.z * sin_phi) * uv_pixf_inv;
 			// float v_pixf = fy * (t.x * sin_phi * sin_theta + t.y * cos_theta + t.z * sin_theta * cos_phi) * uv_pixf_inv;
-			float u_pixf = fx * (t.x * sc.z - t.z * sc.w) * uv_pixf_inv;
-			float v_pixf = fy * (t.x * sc.w * sc.y + t.y * sc.x + t.z * sc.y * sc.z) * uv_pixf_inv;
+			float u_pixf = fx * (t.x * sc_alt.z - t.z * sc_alt.w) * uv_pixf_inv;
+			float v_pixf = fy * (t.x * sc_alt.w * sc_alt.y + t.y * sc_alt.x + t.z * sc_alt.y * sc_alt.z) * uv_pixf_inv;
 
 			float2 d = { u_xy - u_pixf, v_xy - v_pixf }; 
 

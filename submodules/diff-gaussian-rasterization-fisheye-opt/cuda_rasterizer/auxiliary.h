@@ -72,6 +72,13 @@ __forceinline__ __device__ float3 spherical_coordinates_to_cartesian(const float
 	return {sc.x * sc.w, -sc.y, sc.x * sc.z};
 }
 
+__forceinline__ __device__ float4 traditional_sc_to_alt(const float4 &sc) {
+	const float3 ray = {sc.y * sc.z, sc.z * sc.w, sc.x};
+	const auto theta = atan2(-ray.y, sqrt(ray.x * ray.x + ray.z * ray.z)); 
+	const auto phi = atan2(ray.x, ray.z);
+	return {cos(theta), sin(theta), cos(phi), sin(phi)};
+}
+
 __forceinline__ __device__ float3 get_ray(
 	const float2 &pixel_coordinate,
 	const float2 &camera_center,
