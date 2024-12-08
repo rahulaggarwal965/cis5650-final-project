@@ -99,17 +99,17 @@ __forceinline__ __device__ float2 projectEquidistantFisheye(
 
 	//we have theta = sqrt((x_pix - center_x)*inv_focal_x + ...)
 	//float xoz = point3D.x / point3D.y;
-	float yox = point3D.y / point3D.x;
 
-	float dx = sqrt((theta * theta) / (1 + (yox * yox)));
-	dx /= inv_focal.x;
+	float r = theta * (1.0 / inv_focal.x);
+	float dx = r * (dir.x / sqrt(dir.x * dir.x + dir.y * dir.y));
+	float dy = r * (dir.y / sqrt(dir.x * dir.x + dir.y * dir.y));
 	//float r = theta * (1.0 / inv_focal.x);
 	//float dx = r * 
 	//dx = -dx;
-	if(point3D.x < 0){
-		dx = -dx;
-	}
-	float dy = dx * yox;
+	//if(point3D.x < 0){
+	//	dx = -dx;
+	//}
+	//float dy = dx * yox;
 
 	float2 pixelCoords = {camera_center.x + dx, camera_center.y + dy};
 
@@ -130,6 +130,22 @@ __forceinline__ __device__ float2 projectEquidistantFisheye(
 __forceinline__ __device__ float3 spherical_coordinates_to_cartesian(const float4 &sc) {
 	return {sc.y * sc.z, sc.y * sc.w, sc.x};
 	//return {sc.x * sc.w, -sc.y, sc.x * sc.z};
+}
+
+__forceinline__ __device__ float3 cross(const float3 &a, const float3 &b) {
+	return make_float3(
+        a.y * b.z - a.z * b.y, // x component
+        a.z * b.x - a.x * b.z, // y component
+        a.x * b.y - a.y * b.x  // z component
+);
+}
+
+__forceinline__ __device__ float3 scalar_mult_float3(const float3 &a, const float &b) {
+	return make_float3(a.x * b, a.y * b, a.z * b);
+}
+
+__forceinline__ __device__ float3 subtract_float3(const float3 &a, const float3 &b) {
+	return make_float3(a.x - b.x, a.y - b.y, a.z - b.z);
 }
 
 __forceinline__ __device__ float4 traditional_sc_to_alt(const float4 &sc) {
@@ -267,14 +283,14 @@ __forceinline__ __device__ bool in_frustum(int idx,
 	float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
 	p_view = transformPoint4x3(p_orig, viewmatrix);
 
-	if (p_view.z <= 0.2f)// || ((p_proj.x < -1.3 || p_proj.x > 1.3 || p_proj.y < -1.3 || p_proj.y > 1.3)))
+	if (p_view.z <= -1.2f)// || ((p_proj.x < -1.3 || p_proj.x > 1.3 || p_proj.y < -1.3 || p_proj.y > 1.3)))
 	{
 		if (prefiltered)
 		{
 			printf("Point is filtered although prefiltered is set. This shouldn't happen!");
 			__trap();
 		}
-		return false;
+		return true; 
 	}
 	return true;
 }

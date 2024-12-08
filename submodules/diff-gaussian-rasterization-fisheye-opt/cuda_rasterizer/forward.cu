@@ -127,8 +127,9 @@ __device__ float3 computeCov2D(const float3& mean, float focal_x, float focal_y,
 	float3 t = transformPoint4x3(mean, viewmatrix);
 
 	// For anti-aliasing
-	const float fx = max(512.f, focal_x);
-	const float fy = max(512.f, focal_y);
+	const float fx = focal_x;//max(512.f, focal_x);
+	const float fy = focal_x;//max(512.f, focal_y);
+
 
 	// Project the Gaussian's mean onto the tangent plane
 	float dis_inv = 1.0f / (sqrt(t.x * t.x + t.y * t.y + t.z * t.z) + 0.0000001f);
@@ -267,8 +268,10 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	bool prefiltered)
 {
 	auto idx = cg::this_grid().thread_rank();
+
 	if (idx >= P)
 		return;
+
 
 	// Initialize radius and touched tiles to 0. If this isn't changed,
 	// this Gaussian will not be processed further.
@@ -290,6 +293,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	// If 3D covariance matrix is precomputed, use it, otherwise compute
 	// from scaling and rotation parameters. 
+
 	const float* cov3D;
 	if (cov3D_precomp != nullptr)
 	{
@@ -321,10 +325,12 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float lambda1 = mid + sqrt(max(0.1f, mid * mid - det));
 	float lambda2 = mid - sqrt(max(0.1f, mid * mid - det));
 	float my_radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
+	//my_radius = 50.f;
 
 
 	//float2 point_image = { ndc2Pix(p_proj.x, W), ndc2Pix(p_proj.y, H) };
 	p_view = transformPoint4x3(p_orig, viewmatrix);
+	float p_view_rad = sqrt(p_view.x * p_view.x + p_view.y * p_view.y + p_view.z * p_view.z);
 	const float2 camera_center = {0.5 * W - 0.5, 0.5 * H - 0.5};
 	const float2 inv_focal = {1.0f / focal_x, 1.0f / focal_y};
 	float2 point_image = projectEquidistantFisheye(p_view, camera_center, inv_focal);
@@ -346,7 +352,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	}
 
 	// Store some useful helper data for the next steps.
-	depths[idx] = p_view.z;
+	depths[idx] = p_view_rad;
 	radii[idx] = my_radius;
 	points_xy_image[idx] = point_image;
 
@@ -435,8 +441,8 @@ renderCUDA(
 	//this is applicable to the circular edge of the fisheye camera
 	//float cos_angle = t.z / sqrt(t.x * t.x + t.y * t.y + t.z * t.z);
 	float cos_angle = t.z / sqrt(t.x * t.x + t.y * t.y + t.z * t.z);
-	if (acos(cos_angle) > fov_max/2) {
-		//done = true;
+	if (acos(cos_angle) > fov_max/2.0) {
+		done = true;
 	}
 
 	// Iterate over batches until all done or range is complete
@@ -480,8 +486,8 @@ renderCUDA(
 			// float2 xy = collected_xy[j];
 			
 			// Compute the tangent plane coordinates of the 2D Gaussian mean.
-			const auto &sc_trad = gaussians_sc[j];
-			const auto &sc = traditional_sc_to_alt(sc_trad);
+			const auto &sc = gaussians_sc[j];
+			//const auto &sc = traditional_sc_to_alt(sc_trad);
 			// const float4 sc = get_spherical_coordinates_sincos(xy, camera_center, inv_focal);
 			const float3 mu = spherical_coordinates_to_cartesian(sc);
 
@@ -491,17 +497,61 @@ renderCUDA(
 				continue;
 			}
 
-			float u_xy = 0.0f;
-			float v_xy = 0.0f;
+			/*
 
-			float uv_pixf_inv = 1.f / (mu.x * t.x + mu.y * t.y + mu.z * t.z);
+			float theta_diff = acos(mu.x * t.x + mu.y * t.y + mu.z * t.z);
+
+			float3 z_ax = mu;
+			float3 y_ax = {0.0, -1.0, 0.0};
+			y_ax = subtract_float3(y_ax, scalar_mult_float3(z_ax, (y_ax.x * z_ax.x + y_ax.y * z_ax.y + y_ax.z * z_ax.z)));
+			float y_ax_inv =1.0f / sqrt(y_ax.x * y_ax.x + y_ax.y * y_ax.y + y_ax.z * y_ax.z);
+			y_ax = scalar_mult_float3(y_ax, y_ax_inv);
+			float3 x_ax = cross(y_ax, z_ax);
+
+			float u_pixf = fx * (t.x * x_ax.x + t.y * x_ax.y + t.z * x_ax.z) * uv_pixf_inv;
+			float v_pixf = fy * (t.x * y_ax.x + t.y * y_ax.y + t.z * y_ax.z) * uv_pixf_inv;
+			*/
+
+
 
 			// float u_pixf = fx * (t.x * cos_phi - t.z * sin_phi) * uv_pixf_inv;
 			// float v_pixf = fy * (t.x * sin_phi * sin_theta + t.y * cos_theta + t.z * sin_theta * cos_phi) * uv_pixf_inv;
 
+			float u_xy = 0.0f;
+			float v_xy = 0.0f;
 
-			float u_pixf = fx * (t.x * sc.z - t.z * sc.w) * uv_pixf_inv;
-			float v_pixf = fy * (t.x * sc.w * sc.y + t.y * sc.x + t.z * sc.y * sc.z) * uv_pixf_inv;
+
+			//float u_pixf = fx * (t.x * sc.z - t.z * sc.w) * uv_pixf_inv;
+			//float v_pixf = fx * (t.x * sc.w * sc.y + t.y * sc.x + t.z * sc.y * sc.z) * uv_pixf_inv;
+			//float v_pixf = fy * (t.x * sc.w * sc.y + t.y * sc.x + t.z * sc.y * sc.z) * uv_pixf_inv;
+			float uv_pixf_inv = 1.f / (mu.x * t.x + mu.y * t.y + mu.z * t.z);
+			float3 x_vec = cross(mu, make_float3(0.0f, 1.0f, 0.0f));
+			x_vec = scalar_mult_float3(x_vec, 1.0f / sqrt(x_vec.x * x_vec.x + x_vec.y * x_vec.y + x_vec.z * x_vec.z));
+			float3 y_vec = cross(mu, x_vec);
+
+			float3 t_stretch = scalar_mult_float3(t, uv_pixf_inv);
+			float u_pixf = (t_stretch.x * x_vec.x + t_stretch.y * x_vec.y + t_stretch.z * x_vec.z) * fx;
+			float v_pixf = (t_stretch.x * y_vec.x + t_stretch.y * y_vec.y + t_stretch.z * y_vec.z) * fx;
+
+			/*
+			float ut_dot = t.x * mu.x + t.y * mu.y + t.z * mu.z;
+			glm::vec3 x2d = {t.x / ut_dot, t.y / ut_dot, t.z / ut_dot};
+
+			float xz_sqrt = sqrt(mu.x * mu.x + mu.z * mu.z);
+			float xyz_sqrt =  sqrt(mu.x * mu.x + mu.y * mu.y + mu.z * mu.z);
+
+			glm::mat2x3 Q_mat = {mu.z / xz_sqrt,
+						   0.0f, 
+						   -mu.x / xz_sqrt, 
+						   -mu.x * mu.y / (xz_sqrt * xyz_sqrt), 
+						   xz_sqrt / xyz_sqrt, 
+						   -mu.y * mu.z / (xz_sqrt * xyz_sqrt), 
+						  };
+
+			glm::vec2 uv = Q_mat * x2d;
+			float u_pixf = uv.x * 50.0f;
+			float v_pixf = uv.y * 50.0f;
+			*/
 
 			float2 d = { u_xy - u_pixf, v_xy - v_pixf }; 
 
@@ -547,6 +597,7 @@ renderCUDA(
 
 	}
 
+
 	// max reduce the last contributor
     typedef cub::BlockReduce<uint32_t, BLOCK_X, cub::BLOCK_REDUCE_WARP_REDUCTIONS, BLOCK_Y> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
@@ -590,6 +641,7 @@ void FORWARD::render(
 		out_color,
 		focal_x, focal_y, fov_max);
 }
+
 
 void FORWARD::preprocess(int P, int D, int M,
 	const float* means3D,
