@@ -137,7 +137,7 @@ We note that the parallelization scheme for gaussian splatting assigns each *til
 Pre-Optimization:
 - During each iteration, each thread computes partial gradients and writes to global gradient arrays using atomicAdd
 
-![pre_opt](assets/docs/block_level_reduction/pre_opt.PNG)
+![pre_opt](assets/docs/block_level_reduction/pre_opt.png)
 
 Post-Optimization:
 - During each iteration
@@ -145,13 +145,13 @@ Post-Optimization:
   - Warp leader writes reduced value to shared memory
     - 2D shared memory: [iteration][warp_id]
    
-![post_opt_0](assets/docs/block_level_reduction/post_opt_0.PNG)
+![post_opt_0](assets/docs/block_level_reduction/post_opt_0.png)
 
 - Once we fill up shared memory with enough iterations (batches), each warp takes a shared memory batch with NUM_WARPS partial gradients to reduce
 - Perform warp-level reduction on the batch
 - Warp leader writes final reduced gradient for the batch to global gradient arrays using atomicAdd
 
-![post_opt_1](assets/docs/block_level_reduction/post_opt_1.PNG)
+![post_opt_1](assets/docs/block_level_reduction/post_opt_1.png)
 
 In theory, best case is that atomicAdd calls are reduced by 1/(32 * NUM_WARPS), where NUM_WARPS equals BLOCK_SIZE/32. In other words, this equals 1/BLOCK_SIZE.
 - 1/32 from initial warp-level reduction
