@@ -7,6 +7,8 @@ Optisplat
   * Linkedins: [Rahul Aggarwal](https://www.linkedin.com/in/rahul-aggarwal-32133a1b3/), [Josh Smith](https://www.linkedin.com/in/joshua-smith-32b165158/), [Mike Rabbitz](https://www.linkedin.com/in/mike-rabbitz/)
 * Tested on: Ubuntu 20.04 x86_64, AMD EPYC 7452 32-Core (128) @ 2.35GHz 512GB, NVIDIA RTX A6000 48GB
 
+![bicycle](assets/docs/renders/bicycle.gif)
+
 ## Overview (What is optimal splatting?)
 
 This project addresses the inherent limitations of traditional gaussian splatting techniques in rendering 3D scenes. Standard gaussian splatting involves approximating the projection of 3D gaussians into 2D splats using a first order approximation as the perspective transformation for 3D gaussians does not have a closed form. These projection errors degrade the quality of both training and inference in Gaussian splatting-based rendering.
@@ -428,6 +430,8 @@ We see that the centers of the image are quite visually accurate and have the di
 
 Gaussian splatting SLAM is a method that combines simultaneous localization and mapping (SLAM) with gaussian splatting, a technique used for rendering and reconstructing 3D scenes.
 
+![lecture_slam](assets/docs/slam/slam_lecture.gif)
+
 ### SLAM Framework
 * SLAM continuously estimates a moving device's position and orientation (localization) while simultaneously building a map of the environment.
 * It processes input data, typically from cameras, LiDAR, or depth sensors, to compute pose estimates and map updates.
@@ -447,6 +451,8 @@ Gaussian splatting SLAM is a method that combines simultaneous localization and 
 Overall, Gaussian splatting SLAM leverages the compactness and efficiency of Gaussian splatting to enhance SLAM's ability to reconstruct and render environments in real-time.
 
 ## Optimal Splatting SLAM
+
+![rover_slam](assets/docs/slam/slam_rover.gif)
 
 We decided to approach the idea of integrating our optimal splatting approach with gaussian splatting SLAM because many robots in the current world use fisheye or other wide-fov lenses. This allows them to see more of their surroundings, thereby allowing them to reason better about their current location and next actions. Indeed, we expect gaussian splatting to be a great tool for SLAM in the future because it is able to efficiently and robustly model the scene's photometric detail. However, as of now, there is no gaussian splatting SLAM model that allows you to use wide FOV cameras. Therefore, we take on the task of adding camera and depth gradients to our optimal splatting approach to make our algorithm amenable to a SLAM setting.
 
@@ -547,6 +553,21 @@ Or the single process version as
 python slam.py --config configs/rgbd/replica/office0_sp.yaml
 ```
 
+## Running on the Insta360 (WFOV)
+
+In the `MonoGS` submodule please run:
+
+```bash
+git checkout insta360
+```
+
+This branch contains the changes necessary to run on a 360 degree camera.
+
+To run,
+```bash
+python slam.py --config
+```
+
 ## Evaluation
 To evaluate our method, please add `--eval` to the command line argument:
 ```bash
@@ -563,6 +584,23 @@ We tested on the TUM (NARROW FOV) dataset as of now, where we see that optimal S
 | Original        | ![tum_origslam](assets/slam_results/tum_original_slam_traj.png)    | 0.063     | 0.44     | 0.71     | 19.8     | **4.1** |
 | Optimal         | ![tum_optislam](assets/slam_results/tum_optimal_slam_traj.png)    | 0.058    | 0.36     | 0.75     | 21.7     | 0.54    |
 | Optimal + Depth | ![tum_ptislam_depth](assets/slam_results/tum_optimal_plus_depth_slam_traj.png)    | **0.017** | **0.23** | **0.82** | **23.4** | 0.43    |
+
+We additionally perform a larger scale quantitative evaluation averaged across three trajectories sampled from each of the Replica and TUM datasets. Below, we report tracking quality in absolute trajectory error (ATE), image quality in peak signal-to-noise ratio (PSNR) and speed in frames per second (FPS)
+
+### Tracking Quality
+![slam_ate](assets/docs/slam_qual/ate_comp.png)
+
+The absolute trajectory error is measured as the pose deviation across the entire trajectory. We see that our tracking quality with default optimal splatting is slightly better, likely owed to the better updates being sent to gaussian poisitions over time. With depth supervision, we see a remarkable improvement in performance, as depth makes the problem much easier.
+
+### Image Quality
+![slam_psnr](assets/docs/slam_qual/psnr_comp.png)
+
+This is the best graph that shows the usefulness of our approach versus the original. Focusing on optimal splatting without depth, we see a (+3) increase in PSNR, which is quite significant in this domain where 30-40 PSNR is considered very high quality. Our visual quality is clearly the main factor in why our method would be preferred.
+
+### Efficiency
+![slam_fps](assets/docs/slam_qual/fps_comp.png)
+
+Here, we see a significant pitfall to our approach. We see a large decrease in frames per second, which means we move away from a real-time approach into more of a post-processing like approach. This means our method will be useful more as a structure from motion approach after the environment has already been captured. It is noted that these numbers are reported **with** our aforementioned optimizations, which means we would need optimizations an order of magnitude greater to get similar performance with the original method.
 
 ## Acknowledgements
 
