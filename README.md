@@ -3,8 +3,8 @@ Optisplat
 
 **University of Pennsylvania, CIS 565: GPU Programming and Architecture, Final Project**
 
-* Rahul Aggarwal, Josh Smith, Mile Rabbitz
-  * Linkedins [TODO] ...
+* Rahul Aggarwal, Josh Smith, Mike Rabbitz
+  * Linkedins: [Rahul Aggarwal](https://www.linkedin.com/in/rahul-aggarwal-32133a1b3/), [Josh Smith](https://www.linkedin.com/in/joshua-smith-32b165158/), [Mike Rabbitz](https://www.linkedin.com/in/mike-rabbitz/)
 * Tested on: Ubuntu 20.04 x86_64, AMD EPYC 7452 32-Core (128) @ 2.35GHz 512GB, NVIDIA RTX A6000 48GB
 
 ## Overview (What is optimal splatting?)
@@ -21,7 +21,7 @@ We aim to make the following key contributions:
 
 - [x] **Optimize Optimal Gaussian Splatting**. Currently, the baseline performance of optimal gaussian splatting when compared to the original implementation is a 3x *slowdown.* We aim to improve performance on optimal gaussian splatting by 66% by writing custom CUDA parallel code for both the forward and backward passes.
 
-- [ ] **Write the novel fisheye camera** forward and backward passes, making it possible to train and render gaussian splats directly from fisheye lenses. This will involve deriving the gradient between the local tangent plane and the image plane projections.
+- [x] **Write the novel fisheye camera** forward and backward passes, making it possible to train and render gaussian splats directly from fisheye lenses. This will involve deriving the gradient between the local tangent plane and the image plane projections.
 
 - [x] **Provide the first 360 degree camera gaussian splatting SLAM implementation**. Gaussian splatting SLAM has been done before with narrow FOV, pinhole cameras. However, 360 degree cameras offer a major challenge as they have a much wider FOV, which causes traditional gaussian splatting SLAM implementations to fail. Additionally, we have to deal with a different camera model, which we aim to first solve through rectification, and then through our fisheye implementation.
 
@@ -109,9 +109,13 @@ In the original 3DGS implementation, both the base color (0th SH band) and highe
 
 Since the base color has a significantly higher weight in the color computation, combining it with the other SH bands introduces unnecessary computational overhead.
 
+Use `--separate_sh` to enable this optimization when training.
+
 #### Tangent Plane Preloading
 
 When computing the tangent plane of each gaussian on the unit sphere, we have to do an expensive calculation involving projecting the ray, caculating the spherical coordinates for the ray and assigning a local coordinate frame to the resulting tangent plane. We note that the parallelization scheme for gaussian splatting assigns each *tile* a CUDA block and each *pixel* within a tile a thread. However, this means that each pixel must iterate through each Gaussian, computing the expensive ray intersection each time. Therefore, we implement a caching mechanism that stores the $sin$ and $cos$ of the spherical coordinates (unit length) in shared memory, loaded a warp at a time. This both reduces memory bandwith and computational overhead, which greatly improves performance.
+
+This optimization is enabled by default during training.
 
 ![tangent_plane_preloading](assets/docs/tangent_plane_preloading.png)
 
@@ -121,6 +125,8 @@ When computing the tangent plane of each gaussian on the unit sphere, we have to
 
 During training, we know that each camera can only see a part of the scene. Therefore, we would not like to optimize the paremeters of all the gaussians in the scene. To do so, we may use a [Sparse ADAM](https://pytorch.org/docs/stable/generated/torch.optim.SparseAdam.html) optimizer. and a mask based on whether a Gaussian radius is on-screen or not. However, because of the nature of optimal splatting, gaussians not in view can still have a contribution to the resulting image due to their *tangent-plane contribution*. Therefore, we take this into account when calculating sparsity.
 
+Use `--optimizer_type sparse_adam` to enable this optimization during training.
+
 ![sparse_gradient_prop](assets/docs/sparse_opt/output_video.gif)
 
 #### Fused SSIM
@@ -128,6 +134,8 @@ During training, we know that each camera can only see a part of the scene. Ther
 The Fused SSIM optimization was taken from [2], and involves optimizing the structural similarity index metric, which is used during loss computation. Below, we provide an excerpt from the paper.
 
 >  3DGS loss computation involves evaluating the SSIM metric. It is configured to use 11×11 Gaussian kernel convolu-tion: we propose using optimized CUDA kernels to perform differentiable 2D convolution via two consecutive 1Dconvolutions since Gaussian kernels are separable in nature. In addition, we use a fused kernel for the evaluation of theSSIM metric from the convolved results. This speeds up the loss calculation and is particularly impactful when thenumber of optimized Gaussians is low compared to image resolution, which is the case when training on a budget.
+
+Use `--fused_ssim` to enable this optimization during training.
 
 #### Block-level Gradient Accumulation
 
@@ -152,9 +160,14 @@ In theory, best case is atomicAdd calls are reduced by 1/256
 Drawback
 - Increased block synchronization overhead
 
+Switch to the `mike/optimization` branch to enable this optimization. Note that because of significant code changes, we choose to add this optimization as a separate branch for the purpose of doing an ablation study.
+
 ### Performance Summary
 
-Our performance metrics were tested on a number of scenes, and overall we see a 37% average improvement due to our various optimizations. Below, we provide an analysis of the Bonsai scene to give a specific example of our optimization's performance on a medium size scene. **Note that the following scene is randomly picked**. We display example renderings and performance summar  below.
+![bonsai](assets/docs/renders/bonsai.gif)
+
+Our performance metrics were tested on a number of scenes, and overall we see a **44%** to **49%** average improvement due to our various optimizations. Below, we provide an analysis of the Bonsai scene to give a specific example of our optimization's performance on a medium size scene. **Note that the following scene is randomly picked**. We display example renderings and performance summary  below.
+
 
 | fov_ratio | GT                           | Render                                                            |
 | --------- | ---------------------------- | ----------------------------------------------------------------- |
@@ -163,15 +176,51 @@ Our performance metrics were tested on a number of scenes, and overall we see a 
 
 Above, we see that our implementation performs quite well even as we increase the FOV, which thereby increases the number of Gaussians that need to be rendered.
 
-![perf_summary](assets/docs/perf_summary.png)
+![perf_summary](assets/docs/perf/optimization_ablations.png)
 
-Overall, we see a 37% improvement on the optimization phase of gaussian splatting, especially as we optimize further. We note that the longer the optimization process goes, the number of gaussians increase. However, we see that we also increase in our performance gain, implying that our optimizations perform better for more expensive operations.
+Overall, we see a **44%** to **49%** improvement on the optimization phase of gaussian splatting, especially as we optimize further. We note that the longer the optimization process goes, the number of gaussians increase. However, we see that we also increase in our performance gain, implying that our optimizations perform better for more expensive operations.
 
-We see that the most important optimization is the separating of the spherical harmonic components, which makes sense because it applies to both the forward and backward passes. The Sparse ADAM, Fused SSIM, and tangent preloading all provide smaller (~5%) improvements that add to solid performance.
+We see that the most important optimization is the separating of the spherical harmonic components, which makes sense because it applies to both the forward and backward passes. In addition, block-level gradient accumulation is very effective in reducing global memory accesses. The Sparse ADAM, Fused SSIM, and tangent preloading all provide smaller (~5%) improvements that add to solid performance.
+
+### Performance vs. Scene Complexity
+
+We would like to verify our claim on how we achieve better performance on more complex scenes. To aid this discussion, we use the number of final gaussians during optimization as a proxy for scene complexity, with the idea that more complex scenes with higher amounts of detail need more gaussians to accurately be captured.
+
+![perf_scene_complexity](assets/docs/perf/num_gaussians_vs_optimization_times.png)
+
+#### Key Observations:
+
+* **General Trend:**
+As the number of Gaussians increases (indicating higher scene complexity), optimization time grows for both methods (Baseline and Optimized). However:  
+  * The **Baseline** (blue line) exhibits a much steeper increase in optimization time.
+  * The **Optimized** method (red line) grows significantly slower, showcasing its efficiency.
+* **Lower Time with Higher Complexity:**
+At smaller Gaussian counts, such as:
+  * **Bicycle (1M Gaussians)**: Baseline takes ~101 minutes, while Optimized is much faster at approximately 50-60 minutes.
+  * **Bonsai and Kitchen (1.5M-2M Gaussians)**: The time gap widens. Baseline is at ~122 and ~133.6 minutes, respectively, while the Optimized method increases minimally.
+  * **Truck and Flowers (>2.5M Gaussians)**: The Baseline grows to ~180-240 minutes, while the Optimized remains much lower, increasing only linearly and reaching a maximum of around 140 minutes.
+* **Efficiency Scaling:** The Optimized method’s improvement over the Baseline becomes **more significant as the scene complexity increases:**
+  * At lower Gaussian counts, the time savings are notable but moderate.
+  * At higher Gaussian counts (e.g., ~3.5M Gaussians), the gap is very large, indicating that the optimization scales effectively compared to the baseline.
+
+#### Conclusion
+The optimized method performs substantially better in terms of scalability as the number of Gaussians (scene complexity) increases. While both methods experience longer optimization times with larger scenes, the optimized approach reduces the rate of growth, making it far more suitable for complex scenarios. This is critical for applications where efficiency at scale matters.
+
+### Image Quality vs. FoV
+
+In order to benchmark quality across different field of views and to make sure that our optimizations do not degrade quality, we make use of the [Frechet Incpetion Distance](https://en.wikipedia.org/wiki/Fr%C3%A9chet_inception_distance). With FID, each image is compared to the entire distribution of images to get a distance where a lower FID is a better result. We must use this because we do not have ground truth for high FOV images. We compare our results with the *original 3DGS* paper to get a sense of how our image quality gets better at higher field of views, something that the original paper does not support. Our x-axis here is the **FOV ratio** or the ratio of the vertical FOV divided by the horizontal FOV. In this sense, our FOV gets larger as our FOV ratio gets smaller.
+
+![perf_fov](assets/docs/perf/fid_vs_fov.png)
+
+Our proposed method outperforms the original method across all FOV ratios, and has the most significant quality gains when the FOV is extremely high.
 
 ## Fisheye Camera Model Implementation
 
-Below, we detail our intuition and implementation for our (wip) fisheye camera model implementation.
+We recommend using the `josh_fisheye` branch to render. (Note: we keep this as a separate branch because of non-compatible changes with rasterization settings, namely, an additional parameter.)
+
+![fisheye_render](assets/docs/renders/fisheye.gif)
+
+Below, we detail our intuition and implementation for our fisheye camera model implementation.
 
 ### Camera Models
 
@@ -365,16 +414,15 @@ Therefore the full jacobian $\mathbf{J}_L(\vec{g})$ can be calcuated as follows:
 We note that our use of the jacobian notation here hides much of the very expensive math that goes into solving this equation. We make use of [cse](https://docs.sympy.org/latest/modules/rewriting.html) to simplify some calculations.
 
 
-### Current State
+### Example Renders (without FoV limiting)
 
-As of 12/01/24, the fisheye camera model implementation still has bugs to fix. We provide a comparison of what our rendering currently generates versus a proper fisheye projection:
+In order to generate clean renders, we provide a limiting FOV factor that generates the black background in the above images. Without this, we generate images like those shown below.
 
-| Ideal Fisheye                                      | Ours                                                             |
+| Example 1                                      | Example 2                                                             |
 | -------------------------------------------------- | ---------------------------------------------------------------- |
-| ![ideal_fisheye](assets/renders/ideal_fisheye.png) | ![ours_fisheye](assets/renders/fov_ratio_0_1_fisheye_render.png) |
+| ![ideal_fisheye](assets/docs/renders/fisheye_uncapped.png) | ![ours_fisheye](assets/docs/renders/fisheye_uncapped_2.png) |
 
-We do see the characteristic circular pattern we would expect to see out of a fisheye lens; however, there are many artifacts outside the circle that represents the max fov. I theorize that this has to do with how the gaussian bounding boxes are being calculated. More work must be done.
-
+We see that the centers of the image are quite visually accurate and have the distortion we would expect to see of a fisheye lens. However, there are many artifacts at the edge of the lens, which seem to be examples of gaussians behind the image plane being projected onto the image. Further work must be done to resolve these issues--like with more accurate bounding boxes, etc.
 
 ## Gaussian Splatting SLAM
 
@@ -508,7 +556,7 @@ This flag will automatically run our system in a headless mode, and log the resu
 
 ## Results
 
-We tested on the TUM (NARROW FOV) dataset as of now, where we see that optimal SLAM performs worse while optimal SLAM + depth performs much better.
+We tested on the TUM (NARROW FOV) dataset as of now, where we see that optimal SLAM performs slightly better while optimal SLAM + depth performs much better.
 
 | Version         | Map | ATE ↓     | LPIPS ↓  | SSIM ↑   | PSNR ↑   | FPS ↑   |
 | --------------- | --- | --------- | -------- | -------- | -------- | ------- |
@@ -526,6 +574,7 @@ This project is built upon [op43dgs](https://github.com/LetianHuang/op43dgs). Pl
 * [Milestone 1](https://docs.google.com/presentation/d/1kTaBZR_AYzOxLMjsLN8go0clONUSYL47gi0aoIQo9Wg/edit?usp=sharing)  
 * [Milestone 2](https://docs.google.com/presentation/d/1asgsxSQ5VbEdhZiO-TxcCMCsjYq1s7_qwXEn_w4wN_g/edit?usp=drive_link)
 * [Milestone 3](https://docs.google.com/presentation/d/1g-BpCL5niX12zsmYnQpC8C8AzdGHj43fHt41Tv6y5xk/edit?usp=drive_link)
+* [Final Presentation](https://docs.google.com/presentation/d/10Cj7GvbOaTvkrWPWPMN8P_et7X-T4p3Z_j8bp7WKmRc/edit?usp=sharing)
 
 ## References
 
