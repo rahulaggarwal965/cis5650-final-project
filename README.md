@@ -130,7 +130,10 @@ The Fused SSIM optimization was taken from [2], and involves optimizing the stru
 >  3DGS loss computation involves evaluating the SSIM metric. It is configured to use 11×11 Gaussian kernel convolu-tion: we propose using optimized CUDA kernels to perform differentiable 2D convolution via two consecutive 1Dconvolutions since Gaussian kernels are separable in nature. In addition, we use a fused kernel for the evaluation of theSSIM metric from the convolved results. This speeds up the loss calculation and is particularly impactful when thenumber of optimized Gaussians is low compared to image resolution, which is the case when training on a budget.
 
 #### Block-level Gradient Accumulation
-In the diagrams in this section, a box represents a thread, n represents block size, and i represents the iteration.
+In the diagrams in this section:
+- a box represents a thread
+- n represents block size
+- i represents the iteration
 
 We note that the parallelization scheme for gaussian splatting assigns each *tile* a CUDA block and each *pixel* within a tile a thread. However, this means that each pixel must iterate through each Gaussian.
 
