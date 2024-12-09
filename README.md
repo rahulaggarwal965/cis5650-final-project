@@ -130,20 +130,28 @@ The Fused SSIM optimization was taken from [2], and involves optimizing the stru
 >  3DGS loss computation involves evaluating the SSIM metric. It is configured to use 11×11 Gaussian kernel convolu-tion: we propose using optimized CUDA kernels to perform differentiable 2D convolution via two consecutive 1Dconvolutions since Gaussian kernels are separable in nature. In addition, we use a fused kernel for the evaluation of theSSIM metric from the convolved results. This speeds up the loss calculation and is particularly impactful when thenumber of optimized Gaussians is low compared to image resolution, which is the case when training on a budget.
 
 #### Block-level Gradient Accumulation
+In the diagrams in this section, a box represents a thread, n represents block size, and i represents the iteration.
 
 We note that the parallelization scheme for gaussian splatting assigns each *tile* a CUDA block and each *pixel* within a tile a thread. However, this means that each pixel must iterate through each Gaussian.
 
 Pre-Optimization:
-- During each iteration, each thread computes partial gradients and writes to global gradient arrays using atomicAdd 
+- During each iteration, each thread computes partial gradients and writes to global gradient arrays using atomicAdd
+
+![pre_opt](assets/docs/block_level_reduction/pre_opt.png)
 
 Post-Optimization:
 - During each iteration
   - Perform warp-level reduction of thread-computed partial gradients using __shfl_down_sync
   - Warp leader writes reduced value to shared memory
     - 2D shared memory: [iteration][warp_id]
+   
+![post_opt_0](assets/docs/block_level_reduction/post_opt_0.png)
+
 - Once we fill up shared memory with enough iterations (batches), each warp takes a shared memory batch with NUM_WARPS partial gradients to reduce
 - Perform warp-level reduction on the batch
 - Warp leader writes final reduced gradient for the batch to global gradient arrays using atomicAdd
+
+![post_opt_1](assets/docs/block_level_reduction/post_opt_1.png)
 
 In theory, best case is that atomicAdd calls are reduced by 1/(32 * NUM_WARPS), where NUM_WARPS equals BLOCK_SIZE/32. In other words, this equals 1/BLOCK_SIZE.
 - 1/32 from initial warp-level reduction
